@@ -1,0 +1,19 @@
+// Pipeline that adds two numbers using a tool node.
+digraph add_two_numbers {
+    graph [
+        goal = "Add two numbers together and report the result"
+        default_max_retry = 1
+    ]
+
+    start  [shape=Mdiamond, label="Start"]
+    add    [shape=parallelogram, label="Add Numbers",
+            type="tool",
+            tool_command="python -c \"print(3 + 5)\""]
+    report [shape=box, label="Report Result",
+            prompt="The addition operation has completed. The result is stored in the tool output. Summarize the result clearly."]
+    exit   [shape=Msquare, label="End"]
+
+    start  -> add
+    add    -> report
+    report -> exit
+}

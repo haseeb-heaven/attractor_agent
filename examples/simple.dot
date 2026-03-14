@@ -1,0 +1,28 @@
+// Simple Attractor pipeline example
+// Linear: start -> generate code -> review -> finalize
+
+digraph simple_pipeline {
+    rankdir=LR;
+    goal="Generate a hello world program";
+
+    // Entry point
+    Start [shape=Mdiamond, label="Start"];
+
+    // Code generation
+    Generate [shape=box, label="Generate Code",
+              prompt="Write a Python hello world program that prints 'Hello, World!'"];
+
+    // Human review
+    Review [shape=hexagon, label="Human Review",
+            prompt="Review the generated code"];
+
+    // Exit
+    Done [shape=Msquare, label="Done"];
+
+    // Flow
+    Start -> Generate;
+    Generate -> Review [label="success"];
+    Generate -> Generate [label="retry", loop_restart=true];
+    Review -> Done [label="approve"];
+    Review -> Generate [label="reject"];
+}
