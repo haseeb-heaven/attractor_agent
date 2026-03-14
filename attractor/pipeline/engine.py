@@ -111,6 +111,7 @@ def select_next_edge(
 def run_pipeline(
     source: str | Graph,
     config: PipelineConfig | None = None,
+    emitter: EventEmitter | None = None,
 ) -> PipelineResult:
     """Execute a pipeline from DOT source or Graph.
 
@@ -123,7 +124,7 @@ def run_pipeline(
         6. FINALIZE:   Emit completion events, return result
     """
     config = config or PipelineConfig()
-    emitter = EventEmitter()
+    emitter = emitter or EventEmitter()
     start_time = time.time()
 
     # --- Phase 1: PARSE ---
