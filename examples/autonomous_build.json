@@ -1,0 +1,12 @@
+{
+  "request": "Build a Flask inventory app with authentication and CRUD operations",
+  "language": "Python",
+  "framework": "Flask",
+  "include_tests": true,
+  "include_sdlc": true,
+  "use_mock": false,
+  "auto_approve": true,
+  "require_human_review": false,
+  "retry_save_attempts": 3,
+  "project_name": "inventory_app"
+}

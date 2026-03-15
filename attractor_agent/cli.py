@@ -1,982 +1,294 @@
-import os
-import re
-import sys
-import socket
-import threading
+from __future__ import annotations
+
+import argparse
 import logging
-import subprocess
-import time
-import atexit
+import sys
+import threading
 from pathlib import Path
-from dataclasses import dataclass
 
 from rich.console import Console
-from rich.prompt import Prompt
-from rich.panel import Panel
-from rich.markdown import Markdown
-from rich.status import Status
 from rich.logging import RichHandler
+from rich.markdown import Markdown
+from rich.panel import Panel
+from rich.prompt import Prompt
+from rich.status import Status
 from rich.tree import Tree
 
-from attractor.pipeline.engine import PipelineConfig, run_pipeline
-from attractor.pipeline.events import EventEmitter, PipelineEventKind, PipelineEvent
-from attractor.pipeline.interviewer import Interviewer, Question, Answer
-from attractor.pipeline.backend import LLMBackend
+from attractor.pipeline.events import EventEmitter, PipelineEvent, PipelineEventKind
+from attractor.pipeline.interviewer import Answer, Interviewer, Question
 
-# ── Logging ───────────────────────────────────────────────────────────────────
+from attractor_agent.extraction import ExtractedBlock, extract_blocks_with_fallbacks
+from attractor_agent.project import (
+    BuildRequest,
+    SUPPORTED_LANGUAGES,
+    build_dot as _project_build_dot,
+    get_extension,
+    get_gradio_language,
+    load_build_request,
+    slugify,
+)
+from attractor_agent.runtime import (
+    _default_filename_for_language,
+    execute_build,
+    get_project_dir,
+    get_smart_filename,
+    save_output_files,
+    wait_for_port,
+)
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     handlers=[
         RichHandler(rich_tracebacks=True, show_path=False),
-        logging.FileHandler("attractor_agent.log", encoding="utf-8")
-    ]
+        logging.FileHandler("attractor_agent.log", encoding="utf-8"),
+    ],
 )
-logger = logging.getLogger("attractor_agent.cli")
 
+logger = logging.getLogger("attractor_agent.cli")
 console = Console()
 
 
-@dataclass
-class ExtractedBlock:
-    """Structured extracted code block."""
-    language: str
-    code: str
-    filename_comment: str | None = None
-    header_filename: str | None = None
-    attribute_filename: str | None = None
-
-
-# ── Port Waiter ───────────────────────────────────────────────────────────────
-def wait_for_port(host: str, port: int, timeout: float = 45.0) -> bool:
-    """
-    Poll until a TCP port accepts connections or timeout expires.
-    Raises RuntimeError if server does not start in time.
-    """
-    logger.info(f"Waiting for server at {host}:{port} (timeout={timeout}s)")
-    start = time.time()
-    while time.time() - start < timeout:
-        try:
-            with socket.create_connection((host, port), timeout=1.0):
-                logger.info(f"✓ Server ready at {host}:{port}")
-                return True
-        except (ConnectionRefusedError, OSError):
-            time.sleep(0.5)
-    raise RuntimeError(
-        f"Server at {host}:{port} did not respond within {timeout}s — "
-        "is Node.js installed? Run: node --version"
-    )
-
-
-# ── Helpers ───────────────────────────────────────────────────────────────────
-def slugify(text: str) -> str:
-    """Convert text to filesystem-safe slug."""
-    slug = re.sub(r'[^a-zA-Z0-9_\-]', '_', text.lower())
-    return re.sub(r'_+', '_', slug).strip('_')
-
-
-def get_extension(language: str) -> str:
-    """Map language name to primary file extension."""
-    lang = language.lower()
-    mapping = {
-        "javascript": ".js",
-        "js":         ".js",
-        "typescript": ".ts",
-        "ts":         ".ts",
-        "html":       ".html",
-        "html/css":   ".html",
-        "go":         ".go",
-        "rust":       ".rs",
-        "c++":        ".cpp",
-        "cpp":        ".cpp",
-        "java":       ".java",
-    }
-    for key, ext in mapping.items():
-        if key in lang:
-            return ext
-    return ".py"
-
-
-def get_file_extension_from_tag(lang_tag: str, fallback_language: str) -> str:
-    """Map a code-fence language tag to a file extension."""
-    ext_map = {
-        "javascript": ".js",
-        "js":         ".js",
-        "typescript": ".ts",
-        "ts":         ".ts",
-        "html":       ".html",
-        "css":        ".css",
-        "sql":        ".sql",
-        "python":     ".py",
-        "go":         ".go",
-        "rust":       ".rs",
-        "java":       ".java",
-        "cpp":        ".cpp",
-        "c++":        ".cpp",
-        "csharp":     ".cs",
-        "c#":         ".cs",
-        "bash":       ".sh",
-        "shell":      ".sh",
-        "json":       ".json",
-        "yaml":       ".yml",
-        "yml":        ".yml",
-        "markdown":   ".md",
-        "md":         ".md",
-        "xml":        ".xml",
-        "toml":       ".toml",
-    }
-    return ext_map.get(lang_tag.lower().strip(), get_extension(fallback_language))
-
-
-def get_smart_filename(lang_tag: str, index: int, language: str) -> str:
-    """
-    Generate a meaningful filename based on language tag and occurrence index.
-    Falls back to file_N.<ext> when the name list is exhausted.
-    """
-    ext = get_file_extension_from_tag(lang_tag, language)
-    name_map: dict[str, list[str]] = {
-        ".html": ["index.html", "login.html", "register.html", "dashboard.html",
-                  "profile.html", "404.html"],
-        ".css":  ["style.css", "auth.css", "dashboard.css", "components.css"],
-        ".js":   ["main.js", "app.js", "api.js", "utils.js", "db.js", "routes.js"],
-        ".ts":   ["main.ts", "app.ts", "api.ts", "utils.ts", "db.ts"],
-        ".sql":  ["schema.sql", "seed.sql", "migrations.sql"],
-        ".py":   ["main.py", "app.py", "models.py", "utils.py", "routes.py",
-                  "database.py", "config.py"],
-        ".sh":   ["setup.sh", "run.sh", "build.sh"],
-        ".json": ["package.json", "config.json", "tsconfig.json"],
-        ".java": ["Main.java", "App.java", "Utils.java", "Database.java"],
-        ".cpp":  ["main.cpp", "app.cpp", "utils.cpp"],
-        ".go":   ["main.go", "app.go", "utils.go"],
-    }
-    names = name_map.get(ext, [])
-    if index < len(names):
-        return names[index]
-    return f"file_{index + 1}{ext}"
-
-
-def _extract_filename_comment(text: str) -> str | None:
-    patterns = [
-        r"^\s*//\s*filename\s*:\s*(.+?)\s*$",
-        r"^\s*#\s*filename\s*:\s*(.+?)\s*$",
-        r"^\s*/\*\s*filename\s*:\s*(.+?)\s*\*/\s*$",
-        r"^\s*<!--\s*filename\s*:\s*(.+?)\s*-->\s*$",
-        r"^\s*filename\s*:\s*(.+?)\s*$",
-    ]
-    for line in text.splitlines()[:5]:
-        for pattern in patterns:
-            m = re.match(pattern, line, re.IGNORECASE)
-            if m:
-                return m.group(1).strip()
-    return None
-
-
-def _strip_filename_markers(text: str) -> str:
-    lines = text.splitlines()
-    start = 0
-    while start < min(len(lines), 5) and _extract_filename_comment(lines[start]):
-        start += 1
-    return "\n".join(lines[start:]).strip()
-
-
-def _parse_info_attributes(info: str) -> tuple[str, str | None]:
-    info = info.strip()
-    if not info:
-        return "", None
-    parts = info.split()
-    lang = parts[0]
-    attr_filename = None
-    for pattern in [r"(?:file|filename|name)\s*=\s*\"([^\"]+)\"", r"(?:file|filename|name)\s*=\s*'([^']+)'", r"(?:file|filename|name)\s*=\s*([^\s]+)"]:
-        m = re.search(pattern, info, re.IGNORECASE)
-        if m:
-            attr_filename = m.group(1).strip()
-            break
-    return lang, attr_filename
-
-
-def _extract_markdown_blocks(text: str) -> list[ExtractedBlock]:
-    blocks: list[ExtractedBlock] = []
-    for info, code in re.findall(r"```([^\n]*)\n(.*?)```", text, re.DOTALL):
-        cleaned = code.strip()
-        if not cleaned:
-            continue
-        lang, attr_filename = _parse_info_attributes(info)
-        filename_comment = _extract_filename_comment(cleaned)
-        blocks.append(
-            ExtractedBlock(
-                language=lang.lower().strip(),
-                code=_strip_filename_markers(cleaned),
-                filename_comment=filename_comment,
-                attribute_filename=attr_filename,
-            )
-        )
-    return blocks
-
-
-def _extract_fallback_marker_blocks(text: str) -> list[ExtractedBlock]:
-    start_re = re.compile(
-        r"^\s*(?:\[|<)?\s*(?:start|begin)?\s*(?:code|file|block|snippet)\b(.*?)(?:\]|>)?\s*$",
-        re.IGNORECASE,
-    )
-    end_re = re.compile(
-        r"^\s*(?:\[|<)?\s*(?:end|stop|close)\s*(?:code|file|block|snippet)?\b.*(?:\]|>)?\s*$",
-        re.IGNORECASE,
-    )
-
-    blocks: list[ExtractedBlock] = []
-    current_lines: list[str] = []
-    current_lang = ""
-    current_attr_filename: str | None = None
-    inside_block = False
-
-    def flush() -> None:
-        if not current_lines:
-            return
-        code = "\n".join(current_lines).strip()
-        if not code:
-            return
-        blocks.append(
-            ExtractedBlock(
-                language=current_lang,
-                code=_strip_filename_markers(code),
-                filename_comment=_extract_filename_comment(code),
-                attribute_filename=current_attr_filename,
-            )
-        )
-
-    for line in text.splitlines():
-        start_match = start_re.match(line)
-        if start_match:
-            if inside_block:
-                flush()
-            current_lines = []
-            inside_block = True
-            attr = start_match.group(1).strip()
-            current_lang, current_attr_filename = _parse_info_attributes(attr)
-            continue
-        if inside_block and end_re.match(line):
-            flush()
-            current_lines = []
-            current_lang = ""
-            current_attr_filename = None
-            inside_block = False
-            continue
-        if inside_block:
-            current_lines.append(line)
-
-    if inside_block:
-        flush()
-    return [b for b in blocks if b.code]
-
-
-def _extract_header_sections(text: str) -> list[ExtractedBlock]:
-    header_re = re.compile(
-        r"^\s*(?:===\s*(.+?)\s*===|---\s*(.+?)\s*---|###\s+(.+?)\s*|FILE\s*:\s*(.+?)\s*)$",
-        re.IGNORECASE,
-    )
-    blocks: list[ExtractedBlock] = []
-    current_filename: str | None = None
-    current_lines: list[str] = []
-
-    for line in text.splitlines():
-        m = header_re.match(line)
-        if m:
-            if current_filename and current_lines:
-                code = "\n".join(current_lines).strip()
-                if code:
-                    blocks.append(ExtractedBlock(language="", code=code, header_filename=current_filename))
-            current_filename = next((g.strip() for g in m.groups() if g), None)
-            current_lines = []
-            continue
-        if current_filename:
-            current_lines.append(line)
-
-    if current_filename and current_lines:
-        code = "\n".join(current_lines).strip()
-        if code:
-            blocks.append(ExtractedBlock(language="", code=code, header_filename=current_filename))
-    return blocks
-
-
-def _extract_filename_comment_sections(text: str) -> list[ExtractedBlock]:
-    blocks: list[ExtractedBlock] = []
-    current_filename: str | None = None
-    current_lines: list[str] = []
-    html_mode = False
-    script_depth = 0
-
-    for line in text.splitlines():
-        lower = line.lower()
-        if "<html" in lower or "<!doctype html" in lower:
-            html_mode = True
-        if html_mode and "<script" in lower:
-            script_depth += 1
-
-        marker = None if (html_mode and script_depth > 0) else _extract_filename_comment(line)
-        if marker:
-            if current_filename and current_lines:
-                blocks.append(
-                    ExtractedBlock(language="", code="\n".join(current_lines).strip(), filename_comment=current_filename)
-                )
-            current_filename = marker
-            current_lines = []
-            continue
-
-        if current_filename:
-            current_lines.append(line)
-
-        if html_mode and "</script>" in lower and script_depth > 0:
-            script_depth -= 1
-
-    if current_filename and current_lines:
-        blocks.append(ExtractedBlock(language="", code="\n".join(current_lines).strip(), filename_comment=current_filename))
-    return [b for b in blocks if b.code]
-
-
-def extract_blocks_with_fallbacks(text: str) -> list[ExtractedBlock]:
-    markdown_blocks = _extract_markdown_blocks(text)
-    if markdown_blocks:
-        return markdown_blocks
-
-    marker_blocks = _extract_fallback_marker_blocks(text)
-    if marker_blocks:
-        return marker_blocks
-
-    header_blocks = _extract_header_sections(text)
-    if header_blocks:
-        return header_blocks
-
-    return _extract_filename_comment_sections(text)
-
-
-def print_project_tree(project_dir: Path) -> None:
-    """Print a Rich directory tree of all generated project files."""
-    tree = Tree(f"[bold green]📁 {project_dir}[/bold green]")
-    for f in sorted(project_dir.iterdir()):
-        if f.is_file():
-            size = f.stat().st_size
-            icon = "📄"
-            if f.suffix in (".html", ".css"):
-                icon = "🌐"
-            elif f.suffix in (".js", ".ts"):
-                icon = "⚡"
-            elif f.suffix == ".py":
-                icon = "🐍"
-            elif f.suffix == ".sql":
-                icon = "🗄️"
-            elif f.suffix == ".md":
-                icon = "📝"
-            elif f.suffix in (".sh",):
-                icon = "🔧"
-            tree.add(
-                f"{icon} [cyan]{f.name}[/cyan] [dim]({size:,} bytes)[/dim]"
-            )
-    console.print(tree)
-
-
-# ── DOT Builder ───────────────────────────────────────────────────────────────
-def build_dot(request: str, language: str, framework: str,
-              include_tests: bool, include_sdlc: bool) -> str:
-    """
-    Build a spec-correct Attractor DOT pipeline with:
-      Plan → Generate → [Tests → TestGate] → Review → [SDLCCheck] → Done
-    """
-    fw = f"using {framework}" if framework else ""
-    logger.debug(
-        f"Building DOT — lang={language} fw='{framework}' "
-        f"tests={include_tests} sdlc={include_sdlc}"
-    )
-
-    dot = f'''digraph generate_app {{
-    rankdir=LR;
-    goal="Build: {request} in {language} {fw}";
-
-    node [shape=box, timeout="1200s", max_retries=2]
-
-    Start [shape=Mdiamond, label="Start"];
-    Done  [shape=Msquare,  label="Done"];
-
-    Plan [
-        label="Plan Architecture",
-        prompt="Plan architecture for: {request} in {language} {fw}.\\nOutput:\\n- Full folder and file structure with exact filenames\\n- Each module/file purpose\\n- All dependencies list\\n- Database schema if needed\\nNO CODE YET.",
-        goal_gate=true
-    ];
-
-    Generate [
-        label="Generate Code",
-        prompt="Using the plan above, write COMPLETE {language} code for: {request} {fw}.\\nStrict rules:\\n- Output EVERY file as a SEPARATE triple backtick code block\\n- Label EVERY block with its language tag e.g. ```html ```css ```javascript ```sql ```python\\n- First line inside EVERY block must be a comment: // filename: <exact-filename> (or # filename: for Python/SQL)\\n- ALL files must be complete, functional and runnable\\n- No explanations or text between blocks",
-        goal_gate=true
-    ];
-'''
-
-    if include_tests:
-        dot += f'''
-    Tests [
-        label="Unit Tests",
-        prompt="Write COMPLETE unit tests for ALL functions in the code above using {language}.\\n- Cover all edge cases\\n- Use the standard test framework for {language}\\n- Output ONLY test code in a single labeled triple backtick block\\n- First line: // filename: test_main{get_extension(language)}",
-        goal_gate=true
-    ];
-
-    RunTests [handler="test_runner", label="Execute Tests", max_retries=2];
-'''
-
-    if include_sdlc:
-        dot += '''
-    SDLCCheck [
-        label="SDLC Validation",
-        prompt="Review ALL generated code files for:\\n1. Error handling and exceptions\\n2. Input validation and sanitization\\n3. Security (SQL injection, XSS, auth checks)\\n4. Logging and observability\\n5. Code documentation\\n6. Memory and performance issues\\nOutput: PASS if everything is good, or a numbered LIST of specific issues per file.",
-        goal_gate=true
-    ];
-'''
-
-    dot += '''
-    Score [handler="satisfaction_scorer", label="Satisfaction Scorer"];
-    DeployTwin [handler="digital_twin", label="Deploy to Digital Twin Universe"];
-    Review [shape=hexagon, label="Human Review"];
-
-    Start -> Plan -> Generate;
-'''
-
-    if include_tests:
-        dot += '''    Generate -> Tests -> RunTests;
-    RunTests -> Score [label="pass", condition="outcome=success"];
-    RunTests -> Generate [label="retry_code", condition="outcome=fail"];
-'''
+def build_dot(
+    request: str | BuildRequest,
+    language: str | None = None,
+    framework: str = "",
+    include_tests: bool = True,
+    include_sdlc: bool = True,
+    attempt: int = 0,
+) -> str:
+    if isinstance(request, BuildRequest):
+        spec = request
     else:
-        dot += '''    Generate -> Score;
-'''
-
-    if include_sdlc:
-        dot += '''    Score -> SDLCCheck;
-    SDLCCheck -> Review [condition="outcome=success"];
-    SDLCCheck -> Generate [condition="outcome=fail", label="[F]ix"];
-'''
-    else:
-        dot += '''    Score -> Review;
-'''
-
-    dot += '''    Review -> DeployTwin [label="[A]pprove"];
-    DeployTwin -> Done;
-    Review -> Generate [label="[R]etry"];
-}
-'''
-    return dot
-
-
-# ── File Saver ────────────────────────────────────────────────────────────────
-def _infer_language_from_filename(filename: str) -> str:
-    suffix = Path(filename).suffix.lower()
-    mapping = {
-        ".py": "python",
-        ".js": "javascript",
-        ".ts": "typescript",
-        ".html": "html",
-        ".css": "css",
-        ".sql": "sql",
-        ".json": "json",
-        ".yml": "yaml",
-        ".yaml": "yaml",
-        ".sh": "bash",
-        ".go": "go",
-        ".rs": "rust",
-        ".java": "java",
-        ".cpp": "cpp",
-        ".cs": "csharp",
-    }
-    return mapping.get(suffix, "")
-
-
-def _default_filename_for_language(lang: str, index: int) -> str:
-    base_map = {
-        "java": "Main.java",
-        "csharp": "Program.cs",
-        "c#": "Program.cs",
-        "go": "main.go",
-        "cpp": "main.cpp",
-        "c++": "main.cpp",
-        "rust": "main.rs",
-        "python": "main.py",
-        "javascript": "app.js",
-        "js": "app.js",
-        "typescript": "main.ts",
-        "ts": "main.ts",
-        "html": "index.html",
-        "css": "styles.css",
-        "sql": "schema.sql",
-    }
-    fallback = base_map.get(lang.lower().strip())
-    if fallback and index == 0:
-        return fallback
-    if fallback:
-        stem = Path(fallback).stem
-        suffix = Path(fallback).suffix
-        return f"{stem}_{index + 1}{suffix}"
-    ext = get_file_extension_from_tag(lang, "python")
-    return f"file_{index + 1}{ext}"
-
-
-def _resolve_filename(block: ExtractedBlock, index: int, language: str) -> str:
-    if block.filename_comment:
-        return block.filename_comment
-    if block.header_filename:
-        return block.header_filename
-    if block.attribute_filename:
-        return block.attribute_filename
-
-    detected_lang = block.language or _infer_language_from_filename(block.filename_comment or "") or language
-    return _default_filename_for_language(detected_lang, index)
-
-
-def save_output_files(
-    result,
-    project_dir: Path,
-    language: str,
-    app_file_name: str
-) -> list[Path]:
-    """Extract generated files with multi-stage fallback parsing and save them."""
-    generate_output = (
-        result.context.get_string("Generate.output", "")
-        or result.context.get_string("generate_output", "")
-        or result.context.get_string("last_response", "")
-        or result.context.get_string("output", "")
-    )
-    tests_output = (
-        result.context.get_string("Tests.output", "")
-        or result.context.get_string("tests_output", "")
-    )
-
-    logger.debug("=== ALL CONTEXT KEYS ===")
-    try:
-        for key in result.context.keys():
-            val = str(result.context.get_string(key, ""))[:200]
-            logger.debug(f"  KEY [{key}] => {val!r}")
-    except Exception as e:
-        logger.warning(f"Could not iterate context keys: {e}")
-    logger.debug("========================")
-
-    if not generate_output:
-        logger.error("Generate output is EMPTY — context key mismatch. Check attractor_agent.log.")
-        console.print(
-            "[bold red]❌ No generated code found in pipeline context.\n"
-            "   Check attractor_agent.log for available KEY names.[/bold red]"
+        spec = BuildRequest(
+            request=request,
+            language=language or "Python",
+            framework=framework,
+            include_tests=include_tests,
+            include_sdlc=include_sdlc,
         )
-        return []
-
-    extracted_blocks = extract_blocks_with_fallbacks(generate_output)
-    logger.info(f"Found {len(extracted_blocks)} extracted block(s) in Generate output")
-
-    if not extracted_blocks:
-        logger.error("No structured blocks detected in generated output.")
-        logger.error("Raw output preview: %r", generate_output[:800])
-        return []
-
-    saved_files: list[Path] = []
-    extracted_manifest: list[dict[str, str]] = []
-
-    for idx, block in enumerate(extracted_blocks):
-        code = block.code.strip()
-        if not code:
-            continue
-
-        filename = _resolve_filename(block, idx, language)
-        fpath = project_dir / filename
-
-        try:
-            os.makedirs(fpath.parent, exist_ok=True)
-            fpath.write_text(code, encoding="utf-8")
-            saved_files.append(fpath)
-            extracted_manifest.append({
-                "filename": filename,
-                "language": block.language or _infer_language_from_filename(filename) or language.lower(),
-                "content": code,
-            })
-            logger.info(f"Saved: {fpath} ({len(code):,} chars)")
-            console.print(
-                f"  [green]✓[/green] Saved [bold]{filename}[/bold] "
-                f"[dim]({len(code):,} chars)[/dim]"
-            )
-        except OSError as e:
-            logger.error(f"Failed to save {fpath}: {e}")
-            console.print(f"  [red]✗[/red] Could not save {filename}: {e}")
-
-    result.context.set("Generate.extracted_files", extracted_manifest)
-
-    if tests_output:
-        test_blocks = _extract_markdown_blocks(tests_output)
-        test_code = test_blocks[0].code.strip() if test_blocks else tests_output.strip()
-        test_ext = get_extension(language)
-        test_file = project_dir / f"test_main{test_ext}"
-        try:
-            test_file.write_text(test_code, encoding="utf-8")
-            saved_files.append(test_file)
-            logger.info(f"Tests saved: {test_file} ({len(test_code):,} chars)")
-            console.print(
-                f"  [green]✓[/green] Tests saved [bold]{test_file.name}[/bold] "
-                f"[dim]({len(test_code):,} chars)[/dim]"
-            )
-        except OSError as e:
-            logger.error(f"Failed to save tests: {e}")
-
-    run_instructions = {
-        "python":     "```bash\npip install -r requirements.txt\npython main.py\n```",
-        "javascript": "```bash\nnpm install\nnode main.js\n```",
-        "typescript": "```bash\nnpm install\nnpx ts-node main.ts\n```",
-        "java":       "```bash\njavac Main.java\njava Main\n```",
-        "c++":        "```bash\ng++ -std=c++17 -o app main.cpp\n./app\n```",
-        "go":         "```bash\ngo run main.go\n```",
-        "rust":       "```bash\ncargo run\n```",
-        "html":       "Open `index.html` in your browser.",
-    }
-    run_cmd = run_instructions.get(language.lower(), "See language documentation.")
-
-    readme_lines = [
-        "# Generated Project\n\n",
-        "**Built by:** Attractor Agent 🚀\n",
-        f"**Language:** {language}\n\n",
-        "## Project Files\n\n",
-    ]
-    for f in saved_files:
-        readme_lines.append(f"- `{f.name}`\n")
-
-    readme_lines.append(f"\n## How to Run\n\n{run_cmd}\n")
-
-    readme_file = project_dir / "README.md"
-    try:
-        readme_file.write_text("".join(readme_lines), encoding="utf-8")
-        logger.info(f"README saved: {readme_file}")
-        console.print("  [green]✓[/green] README saved [bold]README.md[/bold]")
-    except OSError as e:
-        logger.error(f"Failed to save README: {e}")
-
-    return saved_files
+    return _project_build_dot(spec, attempt=attempt)
 
 
-# ── Rich Interviewer ──────────────────────────────────────────────────────────
 class RichInterviewer(Interviewer):
-    """Handles hexagon human-review gate prompts in the Rich TUI."""
+    """Handles review prompts in the Rich CLI."""
 
     def __init__(self, console_lock: threading.Lock, status: Status):
         self.console_lock = console_lock
         self.status = status
 
     def ask(self, question: Question) -> Answer:
-        logger.info(f"Human review gate triggered: node={question.node_id}")
         self.status.stop()
         with self.console_lock:
-            console.print("\n")
-            console.print(Panel(
-                Markdown(question.text),
-                title=f"[bold yellow]👁 Human Review[/bold yellow] "
-                      f"[dim]({question.node_id})[/dim]",
-                border_style="yellow",
-                padding=(1, 2)
-            ))
+            console.print()
+            console.print(
+                Panel(
+                    Markdown(question.text),
+                    title=f"[bold yellow]Human Review[/bold yellow] [dim]({question.node_id})[/dim]",
+                    border_style="yellow",
+                    padding=(1, 2),
+                )
+            )
             options_text = "  ".join(
                 f"[[bold]{option.key.upper()}[/bold]] {option.label}"
                 for option in question.options
             )
-            console.print(f"\n[bold cyan]Options:[/bold cyan]  {options_text}\n")
+            console.print(f"\n[bold cyan]Options:[/bold cyan] {options_text}\n")
             valid_keys = [option.key.lower() for option in question.options]
 
             while True:
                 choice = Prompt.ask("[bold green]Your choice[/bold green]").strip().lower()
-                for opt in question.options:
+                for option in question.options:
                     if (
-                        choice == opt.key.lower()
-                        or choice == opt.label.lower()
-                        or (choice and opt.label.lower().startswith(choice))
+                        choice == option.key.lower()
+                        or choice == option.label.lower()
+                        or (choice and option.label.lower().startswith(choice))
                     ):
-                        logger.info(f"User selected: '{opt.label}'")
                         self.status.start()
-                        return Answer(
-                            question_id=question.id,
-                            selected_label=opt.label
-                        )
+                        return Answer(question_id=question.id, selected_label=option.label)
                 console.print(
-                    f"[red]❌ Invalid choice.[/red] "
-                    f"Valid keys: [bold]{', '.join(valid_keys)}[/bold]"
+                    f"[red]Invalid choice.[/red] Valid keys: [bold]{', '.join(valid_keys)}[/bold]"
                 )
 
 
-# ── Main CLI ──────────────────────────────────────────────────────────────────
-def run_cli() -> None:
-    console.print(Panel(
-        "Welcome to [bold magenta]Attractor Agent[/bold magenta] 🚀\n"
-        "[dim]Full SDLC AI pipeline — Plan → Generate → Test → Review → Done[/dim]",
-        expand=False,
-        border_style="magenta",
-        padding=(1, 4)
-    ))
-    logger.info("=" * 60)
-    logger.info("Attractor Agent CLI started")
-    logger.info("=" * 60)
+def print_project_tree(project_dir: Path) -> None:
+    tree = Tree(f"[bold green]{project_dir}[/bold green]")
+    for file_path in sorted(project_dir.rglob("*")):
+        if not file_path.is_file():
+            continue
+        relative = file_path.relative_to(project_dir).as_posix()
+        size = file_path.stat().st_size
+        tree.add(f"[cyan]{relative}[/cyan] [dim]({size:,} bytes)[/dim]")
+    console.print(tree)
 
-    # ── Collect user inputs ───────────────────────────────────────────────────
+
+def _build_spec_from_args(args: argparse.Namespace) -> BuildRequest:
+    if args.config:
+        spec = load_build_request(args.config)
+    elif args.request:
+        spec = BuildRequest(
+            request=args.request,
+            language=args.language,
+            framework=args.framework or "",
+            include_tests=args.include_tests,
+            include_sdlc=args.include_sdlc,
+            use_mock=args.use_mock,
+            auto_approve=args.auto_approve,
+            require_human_review=args.require_human_review,
+            retry_save_attempts=args.retry_save_attempts,
+            project_name=args.project_name or "",
+            checkpoint_dir=args.project_dir or "",
+        )
+    else:
+        raise ValueError("A request or --config file is required.")
+
+    if args.language:
+        spec.language = args.language
+    if args.framework is not None:
+        spec.framework = args.framework
+    if args.project_name:
+        spec.project_name = args.project_name
+    if args.project_dir:
+        spec.checkpoint_dir = args.project_dir
+    if args.use_mock:
+        spec.use_mock = True
+    if args.require_human_review:
+        spec.require_human_review = True
+    if args.auto_approve:
+        spec.auto_approve = True
+    if args.no_auto_approve:
+        spec.auto_approve = False
+    if args.retry_save_attempts is not None:
+        spec.retry_save_attempts = args.retry_save_attempts
+    return spec
+
+
+def _interactive_spec() -> BuildRequest:
     request = Prompt.ask("[bold cyan]What do you want to build?[/bold cyan]").strip()
     if not request:
-        console.print("[red]No request provided. Exiting.[/red]")
-        logger.error("Empty build request — exiting")
-        sys.exit(1)
+        raise ValueError("No request provided.")
 
     language = Prompt.ask(
         "[bold cyan]Programming language?[/bold cyan]",
-        choices=["Python", "JavaScript", "TypeScript", "HTML",
-                 "Go", "Rust", "C++", "Java"],
-        default="Python"
+        choices=SUPPORTED_LANGUAGES,
+        default="Python",
     )
-    framework = Prompt.ask(
-        "[bold cyan]Framework? (Enter to skip)[/bold cyan]",
-        default=""
-    ).strip()
-    include_tests = Prompt.ask(
-        "[bold cyan]Include unit tests? (y/n)[/bold cyan]",
-        default="y"
-    ).strip().lower() == "y"
-    include_sdlc = Prompt.ask(
-        "[bold cyan]Include SDLC review? (y/n)[/bold cyan]",
-        default="y"
-    ).strip().lower() == "y"
-    use_mock = Prompt.ask(
-        "[bold cyan]Use Mock LLM for testing? (localhost:5555) (y/n)[/bold cyan]",
-        default="n"
-    ).strip().lower() == "y"
+    framework = Prompt.ask("[bold cyan]Framework? (Enter to skip)[/bold cyan]", default="").strip()
+    include_tests = Prompt.ask("[bold cyan]Include unit tests? (y/n)[/bold cyan]", default="y").lower() == "y"
+    include_sdlc = Prompt.ask("[bold cyan]Include SDLC review? (y/n)[/bold cyan]", default="y").lower() == "y"
+    use_mock = Prompt.ask("[bold cyan]Use mock LLM? (y/n)[/bold cyan]", default="n").lower() == "y"
+    require_human_review = (
+        Prompt.ask("[bold cyan]Require human review before deploy? (y/n)[/bold cyan]", default="n").lower() == "y"
+    )
+    auto_approve = not require_human_review
 
-    logger.info(
-        f"Config — request='{request[:80]}' lang={language} "
-        f"fw='{framework}' tests={include_tests} "
-        f"sdlc={include_sdlc} mock={use_mock}"
+    return BuildRequest(
+        request=request,
+        language=language,
+        framework=framework,
+        include_tests=include_tests,
+        include_sdlc=include_sdlc,
+        use_mock=use_mock,
+        auto_approve=auto_approve,
+        require_human_review=require_human_review,
     )
 
-    # ── Project directory setup ───────────────────────────────────────────────
-    slug = slugify(request)[:30] or "project"
-    project_dir = Path("projects") / slug
-    os.makedirs(project_dir, exist_ok=True)
-    app_file_name = f"main{get_extension(language)}"
-    logger.info(f"Project dir: {project_dir} | Main file: {app_file_name}")
-    console.print(f"[dim]📁 Project folder: [bold]{project_dir}[/bold][/dim]")
 
-    # ── Build and save DOT ────────────────────────────────────────────────────
-    dot_content = build_dot(request, language, framework, include_tests, include_sdlc)
-    dot_file = project_dir / "pipeline.dot"
-    dot_file.write_text(dot_content, encoding="utf-8")
-    console.print(f"[dim]🔧 Pipeline DOT saved: {dot_file}[/dim]")
-    logger.info(f"DOT saved: {dot_file}")
+def _create_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Attractor Agent CLI")
+    parser.add_argument("--request", help="What to build")
+    parser.add_argument("--config", help="Path to a JSON or TOML build config")
+    parser.add_argument("--language", default="Python", help="Target language")
+    parser.add_argument("--framework", default=None, help="Framework name")
+    parser.add_argument("--include-tests", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--include-sdlc", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--use-mock", action="store_true", help="Use the local mock LLM server")
+    parser.add_argument("--auto-approve", action="store_true", help="Auto-approve review steps")
+    parser.add_argument("--no-auto-approve", action="store_true", help="Disable auto-approve")
+    parser.add_argument("--require-human-review", action="store_true", help="Insert a blocking review node")
+    parser.add_argument("--retry-save-attempts", type=int, default=3, help="Max extraction retry attempts")
+    parser.add_argument("--project-name", help="Optional project slug override")
+    parser.add_argument("--project-dir", help="Optional project output directory")
+    parser.add_argument("--interactive", action="store_true", help="Force interactive prompts")
+    return parser
 
-    # ── Backend setup: Mock or Real ───────────────────────────────────────────
-    if use_mock:
-        console.print(
-            "\n[bold yellow]🚀 Starting Mock LLM server on port 5555...[/bold yellow]"
+
+def run_cli(argv: list[str] | None = None) -> int:
+    parser = _create_parser()
+    args = parser.parse_args(argv)
+
+    console.print(
+        Panel(
+            "Attractor Agent\n[dim]Autonomous SDLC pipeline with optional human review[/dim]",
+            expand=False,
+            border_style="magenta",
+            padding=(1, 4),
         )
-        logger.info("Launching mock LLM: node run-mock.mjs")
+    )
 
-        # Use shell=True with a string command — fixes Windows npx.cmd issue
-        # Create fixed launcher
-        launcher = Path("run-mock.mjs")
-        # launcher.write_text(r'''
-		# 	import http from "http";
+    try:
+        if args.interactive or not (args.request or args.config):
+            spec = _interactive_spec()
+        else:
+            spec = _build_spec_from_args(args)
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        return 1
 
-		# 	const port = 5555;
+    console.print(f"[dim]Project folder: [bold]{get_project_dir(spec)}[/bold][/dim]")
 
-		# 	const server = http.createServer((req, res) => {
-		# 	  if (req.method === "POST" && req.url === "/v1/chat/completions") {
-
-		# 	    let body = "";
-
-		# 	    req.on("data", chunk => {
-		# 	      body += chunk;
-		# 	    });
-
-		# 	    req.on("end", () => {
-
-		# 	      const response = {
-		# 	        id: "mock-123",
-		# 	        object: "chat.completion",
-		# 	        created: Date.now(),
-		# 	        model: "mock-model",
-		# 	        choices: [
-		# 	          {
-		# 	            index: 0,
-		# 	            message: {
-		# 	              role: "assistant",
-		# 	              content: `
-		# 	Project architecture:
-
-		# 	src/
-		# 	  main.js
-		# 	  db.js
-		# 	  routes.js
-
-		# 	Dependencies:
-		# 	express
-		# 	sqlite3
-		# 	jsonwebtoken
-		# 	`
-		# 	            },
-		# 	            finish_reason: "stop"
-		# 	          }
-		# 	        ],
-		# 	        usage: {
-		# 	          prompt_tokens: 10,
-		# 	          completion_tokens: 20,
-		# 	          total_tokens: 30
-		# 	        }
-		# 	      };
-
-		# 	      res.writeHead(200, {
-		# 	        "Content-Type": "application/json"
-		# 	      });
-
-		# 	      res.end(JSON.stringify(response));
-
-		# 	    });
-
-		# 	  } else {
-
-		# 	    res.writeHead(404);
-		# 	    res.end();
-
-		# 	  }
-		# 	});
-
-		# 	server.listen(port, () => {
-		# 	  console.log("Mock OpenAI server running on port", port);
-		# 	});
-		# 	''')
-
-        mock_process = subprocess.Popen(
-            ["node", "run-mock.mjs"],
-            stdout=None,
-            stderr=None
-        )
-
-        # Ensure mock server is killed when CLI exits
-        atexit.register(lambda: mock_process.terminate())
-
-        try:
-            # Wait until the port is actually accepting connections
-            wait_for_port("localhost", 5555, timeout=45)
-            console.print("[dim]✓ Mock LLM server is ready.[/dim]\n")
-        except RuntimeError as e:
-            logger.error(f"Mock server startup failed: {e}")
-            console.print(f"[bold red]❌ {e}[/bold red]")
-            sys.exit(1)
-
-        from attractor.llm.client import Client
-        from attractor.llm.adapters.openai import OpenAIAdapter
-
-        mock_adapter = OpenAIAdapter(
-            api_key="mock-key",
-            base_url="http://localhost:5555/v1",
-			stream=False
-        )
-        client = Client(providers={"mock": mock_adapter}, default_provider="mock")
-        backend = LLMBackend(client=client)
-        logger.info("Mock LLM backend ready at http://localhost:5555/v1")
-
-    else:
-        backend = LLMBackend()
-        logger.info("Using default LLMBackend (OpenRouter / configured provider)")
-
-    # ── Pipeline setup ────────────────────────────────────────────────────────
     console_lock = threading.Lock()
-    status = Status(
-        "[bold green]Running pipeline...[/bold green]",
-        console=console
-    )
-    interviewer = RichInterviewer(console_lock, status)
-
-    config = PipelineConfig(
-        simulate=False,
-        codergen_backend=backend,
-        interviewer=interviewer,
-        checkpoint_dir=str(project_dir)
-    )
+    status = Status("[bold green]Running pipeline...[/bold green]", console=console)
+    interviewer: Interviewer | None = None
+    if spec.require_human_review and not spec.auto_approve:
+        interviewer = RichInterviewer(console_lock, status)
 
     emitter = EventEmitter()
 
-    # ── Event handler ─────────────────────────────────────────────────────────
     @emitter.on
     def on_event(event: PipelineEvent) -> None:
-        msg = event.message or ""
         node = event.node_id
-        if event.kind == PipelineEventKind.STAGE_STARTED:
-            logger.info(f"[STAGE STARTED] {node}")
-            with console_lock:
-                status.update(f"[bold blue]⏳ Running:[/bold blue] {node}")
-        elif event.kind == PipelineEventKind.STAGE_COMPLETED:
-            logger.info(f"[STAGE COMPLETED] {node}")
-            with console_lock:
+        message = event.message or ""
+        with console_lock:
+            if event.kind == PipelineEventKind.STAGE_STARTED:
+                status.update(f"[bold blue]Running:[/bold blue] {node}")
+            elif event.kind == PipelineEventKind.STAGE_COMPLETED:
                 console.print(f"  [green]✓[/green] Completed: [bold]{node}[/bold]")
-        elif event.kind == PipelineEventKind.STAGE_FAILED:
-            logger.error(f"[STAGE FAILED] {node} — {msg}")
-            with console_lock:
-                console.print(
-                    f"  [red]✗[/red] Failed: [bold]{node}[/bold] "
-                    f"[dim]— {msg}[/dim]"
-                )
+            elif event.kind == PipelineEventKind.STAGE_FAILED:
+                console.print(f"  [red]✗[/red] Failed: [bold]{node}[/bold] [dim]{message}[/dim]")
 
-    # ── Execute pipeline ──────────────────────────────────────────────────────
-    console.print(
-        f"\n[bold]Starting pipeline for:[/bold] [magenta]{request}[/magenta]\n"
-    )
     status.start()
     try:
-        logger.info("Pipeline execution started")
-        result = run_pipeline(dot_content, config=config, emitter=emitter)
-    except Exception as e:
-        logger.exception(f"Pipeline crashed with unhandled exception: {e}")
-        console.print(f"\n[bold red]❌ Pipeline crashed: {e}[/bold red]")
-        sys.exit(1)
+        artifacts = execute_build(spec, interviewer=interviewer, emitter=emitter)
+    except Exception as exc:
+        status.stop()
+        logger.exception("Build execution failed: %s", exc)
+        console.print(f"[bold red]Pipeline crashed:[/bold red] {exc}")
+        return 1
     finally:
         status.stop()
 
-    # ── Handle result ─────────────────────────────────────────────────────────
-    if result.success:
-        logger.info(
-            f"Pipeline SUCCESS — "
-            f"elapsed={result.elapsed_seconds:.2f}s "
-            f"steps={result.total_steps}"
-        )
+    result = artifacts.result
+    if not result.success:
+        console.print(f"[bold red]Pipeline failed:[/bold red] {result.error}")
+        return 1
+
+    if not artifacts.saved_files:
         console.print(
-            f"\n[bold green]✅ Pipeline complete![/bold green]  "
-            f"Elapsed: [bold]{result.elapsed_seconds:.2f}s[/bold]  "
-            f"Steps: [bold]{result.total_steps}[/bold]\n"
+            f"[bold yellow]Pipeline completed but no files were extracted after {artifacts.attempts_used} attempt(s).[/bold yellow]"
         )
+        return 1
 
-        console.print("[bold]Saving generated files...[/bold]")
-        saved = save_output_files(result, project_dir, language, app_file_name)
-
-        if not saved:
-            logger.warning("No files extracted from Generate output. Retrying pipeline once.")
-            retry_result = run_pipeline(dot_content, config=config, emitter=emitter)
-            saved = save_output_files(retry_result, project_dir, language, app_file_name)
-            if not saved:
-                logger.error(
-                    "No code blocks detected after retry. Raw preview: %r",
-                    retry_result.context.get_string("Generate.output", "")[:800],
-                )
-                console.print("[bold red]❌ No code blocks were detected after one retry. Stopping.[/bold red]")
-
-        if saved:
-            console.print(
-                f"\n[bold green]📦 Project '[cyan]{slug}[/cyan]' "
-                f"saved to [cyan]{project_dir}[/cyan][/bold green]\n"
-            )
-            print_project_tree(project_dir)
-        else:
-            console.print(
-                "[bold yellow]⚠ Pipeline succeeded but no files were saved. "
-                "Check attractor_agent.log.[/bold yellow]"
-            )
-
-    else:
-        logger.error(f"Pipeline FAILED: {result.error}")
-        console.print(f"\n[bold red]❌ Pipeline failed:[/bold red] {result.error}")
-        console.print(
-            "[dim]→ Check [bold]attractor_agent.log[/bold] for full details[/dim]"
-        )
+    console.print(
+        f"[bold green]Pipeline complete.[/bold green] Saved {len(artifacts.saved_files)} files after {artifacts.attempts_used} attempt(s)."
+    )
+    print_project_tree(artifacts.project_dir)
+    return 0
 
 
-# ── Entry point ───────────────────────────────────────────────────────────────
+def main(argv: list[str] | None = None) -> int:
+    return run_cli(argv)
+
+
 if __name__ == "__main__":
-    run_cli()
+    raise SystemExit(main())
