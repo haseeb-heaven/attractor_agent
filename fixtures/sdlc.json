@@ -1,0 +1,24 @@
+{
+  "request": {
+    "messages": [
+      { "role": "user", "content": "Review ALL generated code*" }
+    ]
+  },
+  "response": {
+    "id": "mock-sdlc-001",
+    "object": "chat.completion",
+    "created": 1710000000,
+    "model": "mock",
+    "choices": [
+      {
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": "SDLC Review Result: PASS\n\n✅ Error handling: All SQL operations wrapped in try/catch\n✅ Input validation: Player name and score validated\n✅ Security: No SQL injection risk — PreparedStatement used throughout\n✅ Logging: java.util.logging used in all classes\n✅ Documentation: All public methods have inline comments\n✅ Memory: DB connection properly closed in finally/close()\n✅ Performance: Efficient LinkedList for snake body\n\nAll checks passed. Code is production-ready.\n\nGOAL_ACHIEVED"
+        },
+        "finish_reason": "stop"
+      }
+    ],
+    "usage": { "prompt_tokens": 15, "completion_tokens": 60, "total_tokens": 75 }
+  }
+}

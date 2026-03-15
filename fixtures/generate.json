@@ -1,0 +1,24 @@
+{
+  "request": {
+    "messages": [
+      { "role": "user", "content": "Using the plan above*" }
+    ]
+  },
+  "response": {
+    "id": "mock-generate-001",
+    "object": "chat.completion",
+    "created": 1710000000,
+    "model": "mock",
+    "choices": [
+      {
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": "```java\n// filename: GameConfig.java\npublic class GameConfig {\n    public static final int TILE_SIZE = 20;\n    public static final int BOARD_WIDTH = 600;\n    public static final int BOARD_HEIGHT = 600;\n    public static final int COLS = BOARD_WIDTH / TILE_SIZE;\n    public static final int ROWS = BOARD_HEIGHT / TILE_SIZE;\n    public static final int GAME_SPEED = 120;\n    public static final String DB_PATH = \"snake_scores.db\";\n}\n```\n\n```java\n// filename: Database.java\nimport java.sql.*;\nimport java.util.*;\nimport java.util.logging.*;\n\npublic class Database {\n    private static final Logger log = Logger.getLogger(Database.class.getName());\n    private Connection conn;\n\n    public Database() {\n        try {\n            conn = DriverManager.getConnection(\"jdbc:sqlite:\" + GameConfig.DB_PATH);\n            conn.createStatement().execute(\n                \"CREATE TABLE IF NOT EXISTS high_scores (\" +\n                \"id INTEGER PRIMARY KEY AUTOINCREMENT,\" +\n                \"player TEXT NOT NULL DEFAULT 'Player',\" +\n                \"score INTEGER NOT NULL,\" +\n                \"played_at TEXT NOT NULL DEFAULT (datetime('now')))\");\n            log.info(\"DB ready\");\n        } catch (SQLException e) { log.severe(e.getMessage()); }\n    }\n\n    public void saveScore(String player, int score) {\n        try (PreparedStatement ps = conn.prepareStatement(\n                \"INSERT INTO high_scores (player,score) VALUES (?,?)\")) {\n            ps.setString(1, player); ps.setInt(2, score); ps.executeUpdate();\n        } catch (SQLException e) { log.warning(e.getMessage()); }\n    }\n\n    public List<String[]> getTopScores(int limit) {\n        List<String[]> list = new ArrayList<>();\n        try (PreparedStatement ps = conn.prepareStatement(\n                \"SELECT player,score,played_at FROM high_scores ORDER BY score DESC LIMIT ?\")) {\n            ps.setInt(1, limit);\n            ResultSet rs = ps.executeQuery();\n            while (rs.next()) list.add(new String[]{rs.getString(1),rs.getString(2),rs.getString(3)});\n        } catch (SQLException e) { log.warning(e.getMessage()); }\n        return list;\n    }\n\n    public void close() { try { if(conn!=null) conn.close(); } catch(SQLException ignored){} }\n}\n```\n\n```java\n// filename: Main.java\nimport javax.swing.*;\nimport java.util.logging.*;\n\npublic class Main {\n    private static final Logger log = Logger.getLogger(Main.class.getName());\n\n    public static void main(String[] args) {\n        Logger.getLogger(\"\").setLevel(Level.INFO);\n        SwingUtilities.invokeLater(() -> {\n            log.info(\"Snake Game starting\");\n            Database db = new Database();\n            SoundManager sound = new SoundManager();\n            JFrame frame = new JFrame(\"Snake Game\");\n            frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);\n            GamePanel panel = new GamePanel(db, sound);\n            frame.add(panel);\n            frame.pack();\n            frame.setLocationRelativeTo(null);\n            frame.setVisible(true);\n            panel.requestFocusInWindow();\n            log.info(\"Snake Game started\");\n        });\n    }\n}\n```\n\nGOAL_ACHIEVED"
+        },
+        "finish_reason": "stop"
+      }
+    ],
+    "usage": { "prompt_tokens": 30, "completion_tokens": 200, "total_tokens": 230 }
+  }
+}

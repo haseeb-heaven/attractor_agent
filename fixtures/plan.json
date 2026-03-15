@@ -1,11 +1,11 @@
 {
   "request": {
     "messages": [
-      { "role": "user", "content": "*" }
+      { "role": "user", "content": "Plan architecture*" }
     ]
   },
   "response": {
-    "id": "mock-001",
+    "id": "mock-plan-001",
     "object": "chat.completion",
     "created": 1710000000,
     "model": "mock",
@@ -14,11 +14,11 @@
         "index": 0,
         "message": {
           "role": "assistant",
-          "content": "# Architecture Plan\n\n## Files\n- Main.java\n- Database.java\n- GamePanel.java\n- HighScore.java\n- SoundManager.java\n\n## Dependencies\n- SQLite JDBC\n- javax.sound.sampled\n\n## Schema\nCREATE TABLE scores (id INTEGER PRIMARY KEY, username TEXT, score INTEGER, date TEXT);"
+          "content": "# Architecture Plan\n\n## File Structure\n```\nSnakeGame/\n├── Main.java\n├── GamePanel.java\n├── Snake.java\n├── Food.java\n├── Database.java\n├── SoundManager.java\n├── HighScorePanel.java\n└── GameConfig.java\n```\n\n## Module Purposes\n- Main.java — JFrame entry point\n- GamePanel.java — Game loop, rendering\n- Snake.java — Snake entity, collision\n- Food.java — Food spawning\n- Database.java — SQLite JDBC scores\n- SoundManager.java — WAV audio\n- HighScorePanel.java — Top 10 JTable\n- GameConfig.java — Constants\n\n## Dependencies\n- org.xerial:sqlite-jdbc:3.43.0.0\n- Java 17+ stdlib\n\n## Database Schema\n```sql\nCREATE TABLE IF NOT EXISTS high_scores (\n    id INTEGER PRIMARY KEY AUTOINCREMENT,\n    player TEXT NOT NULL DEFAULT 'Player',\n    score INTEGER NOT NULL,\n    played_at TEXT NOT NULL DEFAULT (datetime('now'))\n);\n```\n\nGOAL_ACHIEVED"
         },
         "finish_reason": "stop"
       }
     ],
-    "usage": { "prompt_tokens": 10, "completion_tokens": 50, "total_tokens": 60 }
+    "usage": { "prompt_tokens": 20, "completion_tokens": 80, "total_tokens": 100 }
   }
 }
