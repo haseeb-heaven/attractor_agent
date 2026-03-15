@@ -112,6 +112,24 @@ def select_next_edge(
     return best_of(edges)
 
 
+def is_terminal_node(node: Node) -> bool:
+    """Check if node is a terminal/exit node (spec §3.4)."""
+    return node.handler_type == "exit" or node.shape == "Msquare"
+
+
+def check_goal_gates(node: Node, graph: Graph, context: Context, outcome: Outcome) -> bool:
+    """Verify if goal gates are satisfied (spec §3.4)."""
+    if not (node.goal_gate and graph.goal):
+        return True
+
+    # Check outcome status stored in context vs spec requirements
+    outcome_status = context.get_string(f"{node.id}.outcome", "FAIL").upper()
+    if outcome_status not in ["SUCCESS", "PARTIAL_SUCCESS"]:
+        return False
+        
+    return outcome.status in [StageStatus.SUCCESS, StageStatus.PARTIAL_SUCCESS]
+
+
 def resolve_fidelity(node: Node, graph: Graph, context: Context) -> str:
     """Resolve context fidelity level (spec §5.4)."""
     fidelity = node.fidelity or graph.default_fidelity or "full"
@@ -244,6 +262,7 @@ def run_pipeline(
     current_node = start_node
     step_count = 0
     final_node = ""
+    node: Node | None = None
 
     while step_count < config.max_total_steps:
         step_count += 1
@@ -346,28 +365,21 @@ def run_pipeline(
         )
 
         # Goal gate enforcement (spec §3.4)
-        if node.goal_gate and graph.goal:
-            # Check if all goal_gate=true nodes have been satisfied.
-            # In this engine, we interpret goal_gate on a node as a requirement 
-            # that must be met before proceeding further or exiting.
-            # If unsatisfied, route to retry_target.
+        if not check_goal_gates(node, graph, context, outcome):
             emitter.emit_simple(
                 PipelineEventKind.LOG,
                 node_id=node.id,
-                message=f"Goal gate check at '{node.id}' (goal: {graph.goal})",
+                message=f"Goal gate check at '{node.id}' unsatisfied (goal: {graph.goal})",
             )
-            # LOGIC: If the node failed or produced a non-success status, 
-            # and it's a goal gate, we MUST retry or jump to retry_target.
-            if outcome.status != StageStatus.SUCCESS:
-                retry_target = node.retry_target or graph.retry_target
-                if retry_target and retry_target in graph.nodes:
-                    emitter.emit_simple(
-                        PipelineEventKind.LOG,
-                        node_id=node.id,
-                        message=f"Goal gate unsatisfied. Jumping to retry_target: {retry_target}",
-                    )
-                    current_node = graph.nodes[retry_target]
-                    continue
+            retry_target = node.retry_target or graph.retry_target
+            if retry_target and retry_target in graph.nodes:
+                emitter.emit_simple(
+                    PipelineEventKind.LOG,
+                    node_id=node.id,
+                    message=f"Jumping to retry_target: {retry_target}",
+                )
+                current_node = graph.nodes[retry_target]
+                continue
 
         # Save checkpoint
         if config.checkpoint_dir:
@@ -387,7 +399,7 @@ def run_pipeline(
             run_tool_hook(graph.attrs["tool_hooks.post"], node, context, emitter)
 
         # Check for exit
-        if node.handler_type == "exit" or node.shape == "Msquare":
+        if is_terminal_node(node):
             final_node = node.id
             break
 
@@ -417,11 +429,9 @@ def run_pipeline(
                 node_id=node.id,
                 message=f"Edge '{selected.label}' has loop_restart=true. Restarting pipeline.",
             )
-            # In a real system, this would relaunch with a fresh log directory.
-            # Here we reset history and jump to start node.
-            completed_nodes = []
-            node_retries = {}
-            current_node = start_node
+            # Clear context and restart from target (spec §2.7)
+            context.clear()
+            current_node = graph.nodes[selected.to_node]
             continue
 
         # Move to the next node
@@ -440,6 +450,10 @@ def run_pipeline(
 
     # --- Phase 6: FINALIZE ---
     success = step_count < config.max_total_steps
+    
+    if not success:
+        if node:
+            final_node = node.id
 
     if success:
         emitter.emit_simple(

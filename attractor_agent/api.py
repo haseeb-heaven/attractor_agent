@@ -2,7 +2,7 @@
 
 import uuid
 from typing import Any, Dict, List, Optional
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
 from pydantic import BaseModel, Field
 
 from attractor.pipeline.engine import run_pipeline, PipelineConfig
@@ -150,6 +150,31 @@ async def create_run(request: PipelineRequest, background_tasks: BackgroundTasks
         request.mock_llm
     )
     
+    return {"run_id": run_id, "status": "RUNNING"}
+
+@app.post("/pipelines")
+async def create_run_from_dot(background_tasks: BackgroundTasks, request: Request):
+    """Create a run from a DOT file directly (Section 9.5)."""
+    run_id = str(uuid.uuid4())
+    source_bytes = await request.body()
+    source = source_bytes.decode("utf-8")
+    
+    # Setup Emitter
+    emitter = DBEventEmitter(run_id)
+    
+    # Save initial run record
+    db.save_run(run_id, goal="DOT Pipeline", config={"source": "direct_dot"})
+    
+    # Background execute
+    def run_it():
+        try:
+            result = run_pipeline(source, config=PipelineConfig(), emitter=emitter)
+            status = "COMPLETED" if result.success else "FAILED"
+            db.update_run(run_id, status=status, final_node=result.final_node, result={"success": result.success})
+        except Exception as e:
+            db.update_run(run_id, status="ERROR", final_node="", result={"error": str(e)})
+            
+    background_tasks.add_task(run_it)
     return {"run_id": run_id, "status": "RUNNING"}
 
 @app.get("/api/v1/runs/{run_id}", response_model=RunDetail)

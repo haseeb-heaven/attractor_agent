@@ -35,8 +35,9 @@ class TestTruncation:
         assert truncate_lines(text, 100) == text
 
     def test_full_pipeline(self):
+        from attractor.agent.config import SessionConfig
         text = "x" * 100_000
-        result = truncate_tool_output(text, "read_file")
+        result = truncate_tool_output(text, "read_file", SessionConfig())
         assert len(result) < 100_000
 
 

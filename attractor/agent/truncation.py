@@ -16,7 +16,7 @@ def truncate_output(output: str, max_chars: int, mode: str = "head_tail") -> str
         half = max_chars // 2
         return (
             output[:half]
-            + f"\n\n[WARNING: Tool output was truncated. {removed} characters were removed from the middle. "
+            + f"\n\n[WARNING: Tool output was truncated. {removed} characters removed from the middle. "
             "The full output is available in the event stream. "
             "If you need to see specific parts, re-run the tool with more targeted parameters.]\n\n"
             + output[-half:]
@@ -24,7 +24,7 @@ def truncate_output(output: str, max_chars: int, mode: str = "head_tail") -> str
 
     # Default to tail truncation
     return (
-        f"[WARNING: Tool output was truncated. First {removed} characters were removed. "
+        f"[WARNING: Tool output was truncated. First {removed} characters removed. "
         "The full output is available in the event stream.]\n\n"
         + output[-max_chars:]
     )

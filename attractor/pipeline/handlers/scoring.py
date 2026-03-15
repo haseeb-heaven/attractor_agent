@@ -32,7 +32,7 @@ class SatisfactionScorerHandler(Handler):
             return Outcome(
                 status=StageStatus.SUCCESS,
                 notes="Simulated score (no backend) - 100/100",
-                context_updates={f"{node.id}.score": 100, f"{node.id}.reason": "Simulated"}
+                context_updates={f"{node.id}.satisfaction_score": 100, f"{node.id}.reason": "Simulated"}
             )
 
         prompt = (
@@ -77,7 +77,7 @@ class SatisfactionScorerHandler(Handler):
 
             return Outcome(
                 status=StageStatus.SUCCESS,
-                context_updates={f"{node.id}.score": score, f"{node.id}.reason": reason}
+                context_updates={f"{node.id}.satisfaction_score": score, f"{node.id}.reason": reason}
             )
 
         except Exception as e:

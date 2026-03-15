@@ -67,18 +67,51 @@ class CodergenHandler(Handler):
 
         if backend is None:
             # Simulation mode
-            context.set(f"{node.id}.output", f"[SIMULATED] Output for: {prompt[:100]}")
+            # For TestRunner compatibility, ensure test functions start with 'test_'
+            # and filenames start with 'test_' for discovery
+            node_id_lower = node.id.lower()
+            func_name = node_id_lower
+            filename = f"{node_id_lower}.py"
+            
+            if "test" in node_id_lower:
+                if not func_name.startswith("test_"):
+                    func_name = f"test_{func_name}"
+                if not filename.startswith("test_"):
+                    filename = f"test_{filename}"
+            
+            sim_output = (
+                "```python\n"
+                f"# filename: {filename}\n"
+                f"# [SIMULATED] Logic for {node.label}\n"
+                f"def {func_name}():\n"
+                "    \"\"\"Simulated logic.\"\"\"\n"
+                "    pass\n"
+                "```"
+            )
+            context.set(f"{node.id}.output", sim_output)
             context.set(f"{node.id}.status", "simulated")
+            context.set(f"{node.id}.outcome", "SUCCESS")
             return Outcome(
                 status=StageStatus.SUCCESS,
                 notes="Simulated (no backend)",
-                context_updates={f"{node.id}.output": f"[SIMULATED] {prompt[:100]}"},
+                context_updates={f"{node.id}.output": sim_output},
             )
 
         try:
             result = backend.generate(prompt, node=node, context=context)
+            
+            # Extract code blocks (Section 5.3)
+            # Find all ```...``` blocks
+            code_blocks = re.findall(r"```(?:[a-zA-Z0-9+\-#]*)\s*(.*?)```", result, re.DOTALL)
+            if code_blocks:
+                # Use the first block as the primary output for downstream handlers
+                # but keep the full result in .raw_output
+                context.set(f"{node.id}.raw_output", result)
+                result = code_blocks[0].strip()
+
             context.set(f"{node.id}.output", result)
             context.set(f"{node.id}.status", "completed")
+            context.set(f"{node.id}.outcome", "SUCCESS")
             return Outcome(
                 status=StageStatus.SUCCESS,
                 context_updates={f"{node.id}.output": result},
