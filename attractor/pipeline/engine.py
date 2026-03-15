@@ -62,11 +62,12 @@ def select_next_edge(
     if not edges:
         return None
 
-    # Tie-breaker helper: highest weight first
+    # Tie-breaker helper: highest weight first, then lexical by to_node (spec §3.3 Step 5)
     def best_of(candidates: list[Edge]) -> Edge | None:
         if not candidates:
             return None
-        return sorted(candidates, key=lambda e: e.weight, reverse=True)[0]
+        # Sort by weight descending, then to_node ascending
+        return sorted(candidates, key=lambda e: (-e.weight, e.to_node))[0]
 
     # Step 1: Suggested next IDs
     if outcome.suggested_next_ids:
@@ -109,6 +110,49 @@ def select_next_edge(
 
     # Step 5: Absolute fallback (should have been covered by Step 4 if any unconditional exists)
     return best_of(edges)
+
+
+def resolve_fidelity(node: Node, graph: Graph, context: Context) -> str:
+    """Resolve context fidelity level (spec §5.4)."""
+    fidelity = node.fidelity or graph.default_fidelity or "full"
+    
+    # Handle composite levels like summary:low
+    if fidelity.startswith("summary:"):
+        # For now, we return the base fidelity; a real impl would 
+        # trigger summarization logic here.
+        return fidelity
+        
+    return fidelity
+
+
+def run_tool_hook(hook_command: str, node: Node, context: Context, emitter: EventEmitter) -> None:
+    """Execute a graph-level tool hook (spec §9.7)."""
+    if not hook_command:
+        return
+        
+    # Expand variables
+    import re
+    command = re.sub(
+        r"\$\{([^}]+)\}",
+        lambda m: context.get_string(m.group(1), f"${{{m.group(1)}}}"),
+        hook_command,
+    )
+    
+    emitter.emit_simple(
+        PipelineEventKind.LOG,
+        node_id=node.id,
+        message=f"Executing tool hook: {command}",
+    )
+    
+    import subprocess
+    try:
+        subprocess.run(command, shell=True, capture_output=True, text=True, timeout=60)
+    except Exception as e:
+        emitter.emit_simple(
+            PipelineEventKind.LOG,
+            node_id=node.id,
+            message=f"Tool hook failed: {e}",
+        )
 
 
 def run_pipeline(
@@ -211,6 +255,14 @@ def run_pipeline(
             message=f"Executing: {node.label or node.id}",
         )
 
+        # Fidelity resolution (spec §5.4)
+        fidelity = resolve_fidelity(node, graph, context)
+        context.set(f"{node.id}.fidelity", fidelity)
+
+        # Graph-level pre-tool hook (spec §9.7)
+        if graph.attrs.get("tool_hooks.pre"):
+            run_tool_hook(graph.attrs["tool_hooks.pre"], node, context, emitter)
+
         # Get handler
         handler = handler_registry.get(node.handler_type)
         if handler is None:
@@ -293,15 +345,29 @@ def run_pipeline(
             status=outcome.status.value,
         )
 
-        # Goal gate enforcement
+        # Goal gate enforcement (spec §3.4)
         if node.goal_gate and graph.goal:
-            # In a real implementation, this would verify the goal
-            # by examining artifacts or running checks
+            # Check if all goal_gate=true nodes have been satisfied.
+            # In this engine, we interpret goal_gate on a node as a requirement 
+            # that must be met before proceeding further or exiting.
+            # If unsatisfied, route to retry_target.
             emitter.emit_simple(
                 PipelineEventKind.LOG,
                 node_id=node.id,
                 message=f"Goal gate check at '{node.id}' (goal: {graph.goal})",
             )
+            # LOGIC: If the node failed or produced a non-success status, 
+            # and it's a goal gate, we MUST retry or jump to retry_target.
+            if outcome.status != StageStatus.SUCCESS:
+                retry_target = node.retry_target or graph.retry_target
+                if retry_target and retry_target in graph.nodes:
+                    emitter.emit_simple(
+                        PipelineEventKind.LOG,
+                        node_id=node.id,
+                        message=f"Goal gate unsatisfied. Jumping to retry_target: {retry_target}",
+                    )
+                    current_node = graph.nodes[retry_target]
+                    continue
 
         # Save checkpoint
         if config.checkpoint_dir:
@@ -315,6 +381,10 @@ def run_pipeline(
                 PipelineEventKind.CHECKPOINT_SAVED,
                 node_id=node.id,
             )
+
+        # Graph-level post-tool hook (spec §9.7)
+        if graph.attrs.get("tool_hooks.post"):
+            run_tool_hook(graph.attrs["tool_hooks.post"], node, context, emitter)
 
         # Check for exit
         if node.handler_type == "exit" or node.shape == "Msquare":
@@ -339,6 +409,20 @@ def run_pipeline(
             target=selected.to_node,
             edge_label=selected.label,
         )
+
+        # Loop Restart handling (spec §2.7)
+        if selected.loop_restart:
+            emitter.emit_simple(
+                PipelineEventKind.LOG,
+                node_id=node.id,
+                message=f"Edge '{selected.label}' has loop_restart=true. Restarting pipeline.",
+            )
+            # In a real system, this would relaunch with a fresh log directory.
+            # Here we reset history and jump to start node.
+            completed_nodes = []
+            node_retries = {}
+            current_node = start_node
+            continue
 
         # Move to the next node
         next_node_id = selected.to_node

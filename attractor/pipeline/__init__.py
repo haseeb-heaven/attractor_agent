@@ -5,6 +5,14 @@ from attractor.pipeline.parser import parse_dot
 from attractor.pipeline.validator import validate, validate_or_raise
 from attractor.pipeline.engine import run_pipeline
 from attractor.pipeline.context import Context, Outcome, StageStatus, Checkpoint
+from attractor.pipeline.interviewer import (
+    Interviewer, 
+    AutoApproveInterviewer, 
+    ConsoleInterviewer, 
+    CallbackInterviewer, 
+    QueueInterviewer, 
+    RecordingInterviewer
+)
 
 __all__ = [
     "Graph",
@@ -18,4 +26,10 @@ __all__ = [
     "Outcome",
     "StageStatus",
     "Checkpoint",
+    "Interviewer",
+    "AutoApproveInterviewer",
+    "ConsoleInterviewer",
+    "CallbackInterviewer",
+    "QueueInterviewer",
+    "RecordingInterviewer",
 ]

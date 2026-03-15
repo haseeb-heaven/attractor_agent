@@ -1,7 +1,6 @@
 """Database storage abstractions for Attractor Pipeline runs."""
 
 import abc
-from datetime import datetime
 from typing import Any
 
 
@@ -29,6 +28,16 @@ class StorageBackend(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def list_runs(self, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
-        """List recent runs."""
+    def save_question(self, run_id: str, question_id: str, node_id: str, text: str, options: list[dict[str, Any]]) -> None:
+        """Store a human-in-the-loop question."""
+        pass
+
+    @abc.abstractmethod
+    def get_questions(self, run_id: str) -> list[dict[str, Any]]:
+        """Retrieve unanswered questions for a run."""
+        pass
+
+    @abc.abstractmethod
+    def answer_question(self, run_id: str, question_id: str, answer: dict[str, Any]) -> None:
+        """Submit an answer to a question."""
         pass

@@ -8,6 +8,11 @@ from pydantic import BaseModel, Field
 from attractor.pipeline.engine import run_pipeline, PipelineConfig
 from attractor.db import get_db
 from attractor.pipeline.events import EventEmitter, PipelineEvent
+from attractor.pipeline.interviewer import Interviewer, Question, Answer as HumanAnswer
+from fastapi.responses import StreamingResponse
+import asyncio
+import json
+import time
 
 app = FastAPI(title="Attractor API", version="1.0.0")
 
@@ -57,6 +62,34 @@ class DBEventEmitter(EventEmitter):
             event.payload
         )
 
+class DBInterviewer(Interviewer):
+    """Interviewer that saves questions to DB and polls for answers."""
+    def __init__(self, run_id: str):
+        self.run_id = run_id
+
+    def ask(self, question: Question) -> HumanAnswer:
+        # Save question to DB
+        db.save_question(
+            self.run_id,
+            question.id,
+            question.node_id,
+            question.text,
+            [{"label": o.label, "key": o.key} for o in question.options]
+        )
+        
+        # Poll for answer
+        while True:
+            run = db.get_run(self.run_id)
+            for q in run.get("questions", []):
+                if q["question_id"] == question.id and q["answer"]:
+                    ans_data = json.loads(q["answer"])
+                    return HumanAnswer(
+                        question_id=question.id,
+                        selected_label=ans_data.get("selected_label", ""),
+                        free_text=ans_data.get("free_text", "")
+                    )
+            time.sleep(1) # Wait for human
+
 # --- Background Task ---
 
 def execute_pipeline_task(run_id: str, prompt: str, language: str, include_tests: bool, include_sdlc: bool, mock_llm: bool):
@@ -71,7 +104,8 @@ def execute_pipeline_task(run_id: str, prompt: str, language: str, include_tests
     # Setup Config
     config = PipelineConfig(
         checkpoint_dir=f"projects/{run_id}",
-        goal=prompt
+        goal=prompt,
+        interviewer=DBInterviewer(run_id)
     )
     
     # Run
@@ -143,10 +177,38 @@ async def get_run(run_id: str):
         events=events
     )
 
-@app.get("/api/v1/runs", response_model=List[RunResponse])
-async def list_runs(limit: int = 10, offset: int = 0):
-    runs = db.list_runs(limit=limit, offset=offset)
-    return [{"run_id": r["run_id"], "status": r["status"]} for r in runs]
+@app.get("/api/v1/runs/{run_id}/events")
+async def stream_events(run_id: str):
+    """SSE stream of pipeline events (spec §9.5)."""
+    async def event_generator():
+        last_event_id = 0
+        while True:
+            run = db.get_run(run_id)
+            if not run:
+                break
+                
+            events = run.get("events", [])
+            for i in range(last_event_id, len(events)):
+                event = events[i]
+                yield f"data: {json.dumps(event, default=str)}\n\n"
+                last_event_id = i + 1
+            
+            if run["status"] in ("COMPLETED", "FAILED", "ERROR"):
+                break
+            await asyncio.sleep(0.5)
+            
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+@app.get("/api/v1/runs/{run_id}/questions")
+async def get_questions(run_id: str):
+    """Get unanswered questions (spec §9.5)."""
+    return db.get_questions(run_id)
+
+@app.post("/api/v1/runs/{run_id}/questions/{qid}/answer")
+async def answer_question(run_id: str, qid: str, answer: Dict[str, Any]):
+    """Answer a question (spec §9.5)."""
+    db.answer_question(run_id, qid, answer)
+    return {"status": "success"}
 
 if __name__ == "__main__":
     import uvicorn

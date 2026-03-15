@@ -42,6 +42,20 @@ class SQLiteBackend(StorageBackend):
                 )
             ''')
 
+            conn.execute('''
+                CREATE TABLE IF NOT EXISTS questions (
+                    run_id TEXT,
+                    question_id TEXT PRIMARY KEY,
+                    node_id TEXT,
+                    text TEXT,
+                    options TEXT,
+                    answer TEXT,
+                    answered_at TIMESTAMP,
+                    created_at TIMESTAMP,
+                    FOREIGN KEY(run_id) REFERENCES runs(run_id)
+                )
+            ''')
+
     def save_run(self, run_id: str, goal: str, config: dict[str, Any]) -> None:
         now = datetime.now()
         with sqlite3.connect(self.db_path) as conn:
@@ -67,6 +81,29 @@ class SQLiteBackend(StorageBackend):
                 INSERT INTO events (run_id, event_kind, node_id, payload, timestamp)
                 VALUES (?, ?, ?, ?, ?)
             ''', (run_id, event_kind, node_id, json.dumps(payload), now))
+
+    def save_question(self, run_id: str, question_id: str, node_id: str, text: str, options: list[dict[str, Any]]) -> None:
+        now = datetime.now()
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute('''
+                INSERT INTO questions (run_id, question_id, node_id, text, options, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (run_id, question_id, node_id, text, json.dumps(options), now))
+
+    def get_questions(self, run_id: str) -> list[dict[str, Any]]:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute('SELECT * FROM questions WHERE run_id = ? AND answer IS NULL', (run_id,)).fetchall()
+            return [dict(r) for r in rows]
+
+    def answer_question(self, run_id: str, question_id: str, answer: dict[str, Any]) -> None:
+        now = datetime.now()
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute('''
+                UPDATE questions
+                SET answer = ?, answered_at = ?
+                WHERE run_id = ? AND question_id = ?
+            ''', (json.dumps(answer), now, run_id, question_id))
 
     def get_run(self, run_id: str) -> dict[str, Any] | None:
         with sqlite3.connect(self.db_path) as conn:

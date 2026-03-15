@@ -178,7 +178,7 @@ class WaitForHumanHandler(Handler):
 
 
 class ParallelHandler(Handler):
-    """Fan-out: execute branches concurrently."""
+    """Fan-out: execute branches concurrently (spec §4.8)."""
 
     def execute(self, node: Node, context: Context, graph: Graph,
                 emitter: EventEmitter, **kwargs: Any) -> Outcome:
@@ -186,51 +186,49 @@ class ParallelHandler(Handler):
         if not out_edges:
             return Outcome(status=StageStatus.SUCCESS)
 
-        # Get join policy
-        # Get join policy
-
         emitter.emit_simple(
             PipelineEventKind.PARALLEL_STARTED,
             node_id=node.id,
             branches=len(out_edges),
         )
 
-        results: list[tuple[str, StageStatus]] = []
-
-        # Execute branches (simple sequential for now; real parallelism
-        # would use the engine recursively per-branch)
-        for edge in out_edges:
-            target_id = edge.to_node
-            emitter.emit_simple(
-                PipelineEventKind.PARALLEL_BRANCH_STARTED,
-                node_id=node.id,
-                branch=target_id,
-            )
-            # Mark branches as suggested; actual execution is engine's job
-            results.append((target_id, StageStatus.SUCCESS))
-            emitter.emit_simple(
-                PipelineEventKind.PARALLEL_BRANCH_COMPLETED,
-                node_id=node.id,
-                branch=target_id,
-            )
-
-        emitter.emit_simple(
-            PipelineEventKind.PARALLEL_COMPLETED,
-            node_id=node.id,
-        )
+        # The actual parallel execution is typically managed by a worker pool
+        # or separate engine instances. Here we suggest all targets to the engine.
+        # Spec §4.8: shape=component triggers concurrent branch execution.
+        suggested = [e.to_node for e in out_edges]
 
         return Outcome(
             status=StageStatus.SUCCESS,
-            suggested_next_ids=[e.to_node for e in out_edges],
+            suggested_next_ids=suggested,
+            notes=f"Triggered {len(suggested)} parallel branches",
         )
 
 
 class FanInHandler(Handler):
-    """Consolidation point: wait for all parallel branches."""
+    """Consolidation point: wait for all parallel branches (spec §4.9)."""
 
     def execute(self, node: Node, context: Context, graph: Graph,
                 emitter: EventEmitter, **kwargs: Any) -> Outcome:
-        # Fan-in simply passes through — the engine handles branch collection
+        # Fan-in implementation: shape=tripleoctagon
+        # It should verify that all incoming branches have completed.
+        incoming = graph.incoming_edges(node.id)
+        completed = context.get("completed_nodes", [])
+        
+        pending = [e.from_node for e in incoming if e.from_node not in completed]
+        
+        if pending:
+            emitter.emit_simple(
+                PipelineEventKind.LOG,
+                node_id=node.id,
+                message=f"Fan-in waiting for: {', '.join(pending)}",
+            )
+            # In a synchronous engine, this might return a special status to wait
+            # or just continue if the engine handles the synchronization.
+            return Outcome(
+                status=StageStatus.PARTIAL_SUCCESS,
+                notes=f"Waiting for {len(pending)} branches",
+            )
+
         return Outcome(status=StageStatus.SUCCESS)
 
 
@@ -291,13 +289,30 @@ class ToolHandler(Handler):
 
 
 class ManagerLoopHandler(Handler):
-    """Supervisor loop: observe -> steer -> wait pattern."""
+    """Supervisor loop: observe -> steer -> wait pattern (spec §4.11)."""
 
     def execute(self, node: Node, context: Context, graph: Graph,
                 emitter: EventEmitter, **kwargs: Any) -> Outcome:
-        # Manager loop collects results from previous stages and
-        # decides whether to continue or exit the loop.
-        # In simulation mode, just pass through.
+        # Manager loop: shape=house.
+        # Decisions based on context keys like 'loop_count', 'satisfaction_score'.
+        loop_count = context.get(f"{node.id}.loop_count", 0) + 1
+        context.set(f"{node.id}.loop_count", loop_count)
+        
+        max_loops = int(node.attrs.get("max_loops", "10"))
+        
+        emitter.emit_simple(
+            PipelineEventKind.LOG,
+            node_id=node.id,
+            message=f"Manager loop '{node.id}' iteration {loop_count}/{max_loops}",
+        )
+        
+        if loop_count >= max_loops:
+            return Outcome(
+                status=StageStatus.SUCCESS,
+                preferred_label="exit",
+                notes="Max loops reached",
+            )
+
         return Outcome(status=StageStatus.SUCCESS)
 
 

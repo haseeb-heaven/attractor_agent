@@ -31,21 +31,74 @@ class Outcome:
     failure_reason: str = ""
 
 
+
+class ArtifactStore:
+    """Named artifact store with file-backing for objects > 100KB (spec §5.5)."""
+
+    def __init__(self, base_dir: str | Path):
+        self.base_dir = Path(base_dir)
+        self.base_dir.mkdir(parents=True, exist_ok=True)
+        self._manifest: dict[str, dict[str, Any]] = {}
+
+    def save(self, name: str, data: Any, metadata: dict[str, Any] | None = None) -> str:
+        """Save data as an artifact, offloading to file if > 100KB."""
+        serialized = json.dumps(data, default=str)
+        size = len(serialized)
+        
+        artifact_info = {
+            "name": name,
+            "size": size,
+            "metadata": metadata or {},
+            "timestamp": time.time(),
+        }
+
+        if size > 100 * 1024:
+            file_path = self.base_dir / f"{name}_{int(time.time())}.json"
+            file_path.write_text(serialized, encoding="utf-8")
+            artifact_info["path"] = str(file_path)
+            artifact_info["location"] = "file"
+        else:
+            artifact_info["data"] = data
+            artifact_info["location"] = "memory"
+
+        self._manifest[name] = artifact_info
+        return name
+
+    def load(self, name: str) -> Any:
+        """Load artifact data by name."""
+        info = self._manifest.get(name)
+        if not info:
+            return None
+        
+        if info["location"] == "file":
+            return json.loads(Path(info["path"]).read_text(encoding="utf-8"))
+        return info["data"]
+
+    def list_artifacts(self) -> list[str]:
+        return list(self._manifest.keys())
+
+
 class Context:
     """Thread-safe key-value store shared across all pipeline stages."""
 
-    def __init__(self) -> None:
+    def __init__(self, artifact_dir: str | Path | None = None) -> None:
         self._values: dict[str, Any] = {}
         self._lock = threading.RLock()
         self._logs: list[str] = []
+        self.artifacts = ArtifactStore(artifact_dir or Path(".artifacts"))
 
     def set(self, key: str, value: Any) -> None:
         with self._lock:
+            # If value is large, automatically store in ArtifactStore
+            if isinstance(value, (str, bytes, list, dict)) and len(str(value)) > 50 * 1024:
+                 self.artifacts.save(key, value)
             self._values[key] = value
 
     def get(self, key: str, default: Any = None) -> Any:
         with self._lock:
-            return self._values.get(key, default)
+            val = self._values.get(key, default)
+            # If it's a large value, it might be in ArtifactStore (transparent load is tricky here without markers)
+            return val
 
     def keys(self) -> list[str]:
         with self._lock:
