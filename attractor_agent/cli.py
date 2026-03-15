@@ -379,7 +379,7 @@ def save_output_files(
             re.DOTALL
         )
         # FIX: test_blocks is a list — use  not .strip() directly
-        test_code = test_blocks.strip() if test_blocks else tests_output.strip()
+        test_code = test_blocks[0].strip() if test_blocks else tests_output.strip()
         test_ext = get_extension(language)
         test_file = project_dir / f"test_main{test_ext}"
         try:
@@ -449,11 +449,11 @@ class RichInterviewer(Interviewer):
                 padding=(1, 2)
             ))
             options_text = "  ".join(
-                f"[[bold]{o.key.upper()}[/bold]] {o.label}"
-                for o in question.options
+                f"[[bold]{option.key.upper()}[/bold]] {option.label}"
+                for option in question.options
             )
             console.print(f"\n[bold cyan]Options:[/bold cyan]  {options_text}\n")
-            valid_keys = [o.key.lower() for o in question.options]
+            valid_keys = [option.key.lower() for option in question.options]
 
             while True:
                 choice = Prompt.ask("[bold green]Your choice[/bold green]").strip().lower()

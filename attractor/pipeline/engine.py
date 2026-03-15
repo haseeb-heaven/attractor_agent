@@ -58,54 +58,57 @@ def select_next_edge(
     outcome: Outcome,
     context: Context,
 ) -> Edge | None:
-    """5-step edge selection algorithm from spec §3.3.
-
-    Priority order:
-      1. suggested_next_ids from outcome
-      2. preferred_label match
-      3. condition evaluation
-      4. Unconditional edges
-      5. Weight-based (highest weight)
-    """
+    """Implement the 5-step edge selection algorithm (spec §3.3)."""
     if not edges:
         return None
 
-    # Step 1: Suggested next IDs (highest priority)
+    # Tie-breaker helper: highest weight first
+    def best_of(candidates: list[Edge]) -> Edge | None:
+        if not candidates:
+            return None
+        return sorted(candidates, key=lambda e: e.weight, reverse=True)[0]
+
+    # Step 1: Suggested next IDs
     if outcome.suggested_next_ids:
-        for edge in edges:
-            if edge.to_node in outcome.suggested_next_ids:
-                return edge
+        matches = [e for e in edges if e.to_node in outcome.suggested_next_ids]
+        if matches:
+            return best_of(matches)
 
-    # Step 2: Preferred label match
+    # Step 2: Preferred label
     if outcome.preferred_label:
-        for edge in edges:
-            if edge.label == outcome.preferred_label:
-                return edge
+        matches = [e for e in edges if e.label == outcome.preferred_label]
+        if matches:
+            return best_of(matches)
 
-    # Step 3: Condition evaluation
+    # Step 3: Expression conditions
     conditional = [e for e in edges if e.condition]
-    for edge in conditional:
-        if evaluate_condition(edge.condition, outcome, context):
-            return edge
+    if conditional:
+        matches = []
+        for edge in conditional:
+            if evaluate_condition(edge.condition, outcome, context):
+                matches.append(edge)
+        if matches:
+            return best_of(matches)
 
-    # Step 4: Unconditional edges (no label, no condition → match by status)
+    # Step 4: Unconditional edges matching status or empty label
     unconditional = [e for e in edges if not e.condition]
     if unconditional:
-        # Try to match by label = status name
+        # Match by status value
         status_label = outcome.status.value.lower()
-        for edge in unconditional:
-            if edge.label.lower() == status_label:
-                return edge
-        # Try "success" or empty label as fallback
-        for edge in unconditional:
-            if not edge.label:
-                return edge
-        # Return first unconditional
-        return unconditional[0]
+        status_matches = [e for e in unconditional if e.label.lower() == status_label]
+        if status_matches:
+            return best_of(status_matches)
+            
+        # Fallback to empty label
+        empty_matches = [e for e in unconditional if not e.label]
+        if empty_matches:
+            return best_of(empty_matches)
+            
+        # Final fallback: any unconditional
+        return best_of(unconditional)
 
-    # Step 5: Weight-based fallback (highest weight first)
-    edges_sorted = sorted(edges, key=lambda e: getattr(e, 'weight', 0), reverse=True)
-    return edges_sorted[0] if edges_sorted else None
+    # Step 5: Absolute fallback (should have been covered by Step 4 if any unconditional exists)
+    return best_of(edges)
 
 
 def run_pipeline(
@@ -370,6 +373,7 @@ def run_pipeline(
         context=context,
         completed_nodes=completed_nodes,
         final_node=final_node,
+        error=f"Pipeline exceeded max steps ({config.max_total_steps})" if not success else "",
         total_steps=step_count,
         elapsed_seconds=time.time() - start_time,
     )

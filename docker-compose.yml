@@ -1,0 +1,28 @@
+version: '3.8'
+
+services:
+  attractor-api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - ATTRACTOR_DB=${ATTRACTOR_DB:-mongodb}
+      - MONGO_URI=mongodb://mongodb:27017/
+    depends_on:
+      - mongodb
+    volumes:
+      - ./projects:/app/projects
+      - ./attractor_runs.db:/app/attractor_runs.db
+    restart: always
+
+  mongodb:
+    image: mongo:latest
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+    restart: always
+
+volumes:
+  mongodb_data:
