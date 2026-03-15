@@ -177,11 +177,18 @@ class OpenAIAdapter(ProviderAdapter):
         ]
 
     def complete(self, request: Request) -> Response:
+        """Send a blocking completion request.
+
+        Uses stream=True internally to handle providers (like llmock) that
+        always respond with text/event-stream, then reassembles chunks into
+        a single Response — identical to non-streaming from the caller's view.
+        """
         client = self._ensure_client()
 
         kwargs: dict[str, Any] = {
             "model": request.model,
             "messages": self._build_messages(request),
+            "stream": True,  # ← works with both real OpenAI and llmock
         }
 
         tools = self._build_tools(request)
@@ -190,7 +197,6 @@ class OpenAIAdapter(ProviderAdapter):
         if request.tool_choice:
             tc = request.tool_choice
             kwargs["tool_choice"] = tc.value if hasattr(tc, "value") else tc
-
         if request.temperature is not None:
             kwargs["temperature"] = request.temperature
         if request.top_p is not None:
@@ -201,20 +207,75 @@ class OpenAIAdapter(ProviderAdapter):
             kwargs["stop"] = request.stop_sequences
         if request.reasoning_effort:
             kwargs["reasoning_effort"] = request.reasoning_effort
-
         if request.response_format and request.response_format.type == "json":
             kwargs["response_format"] = {"type": "json_object"}
-
-        # Provider options escape hatch
         if request.provider_options and "openai" in request.provider_options:
             kwargs.update(request.provider_options["openai"])
 
         try:
-            raw_resp = client.chat.completions.create(**kwargs)
+            stream_resp = client.chat.completions.create(**kwargs)
         except Exception as e:
             self._handle_error(e)
 
-        return self._parse_response(raw_resp)
+        # ── Consume all SSE chunks and reassemble into a full Response ────────
+        accumulated_text = ""
+        raw_id = ""
+        raw_model = request.model
+        tool_calls_map: dict[int, dict[str, Any]] = {}
+
+        try:
+            for chunk in stream_resp:
+                if not raw_id and hasattr(chunk, "id") and chunk.id:
+                    raw_id = chunk.id
+                if hasattr(chunk, "model") and chunk.model:
+                    raw_model = chunk.model
+                if not chunk.choices:
+                    continue
+                delta = chunk.choices[0].delta
+                if not delta:
+                    continue
+                # Accumulate text
+                if delta.content:
+                    accumulated_text += delta.content
+                # Accumulate tool calls
+                if delta.tool_calls:
+                    for tc_chunk in delta.tool_calls:
+                        idx = tc_chunk.index
+                    if idx not in tool_calls_map:
+                        tool_calls_map[idx] = {"id": "", "name": "", "arguments": ""}
+                    if tc_chunk.id:
+                        tool_calls_map[idx]["id"] += tc_chunk.id
+                    if tc_chunk.function:
+                        if tc_chunk.function.name:
+                            tool_calls_map[idx]["name"] += tc_chunk.function.name
+                        if tc_chunk.function.arguments:
+                            tool_calls_map[idx]["arguments"] += tc_chunk.function.arguments
+        except Exception as e:
+            self._handle_error(e)
+
+        # ── Build unified Response ────────────────────────────────────────────
+        parts: list[ContentPart] = []
+        if accumulated_text:
+            parts.append(ContentPart.text_part(accumulated_text))
+        for tc_data in tool_calls_map.values():
+            parts.append(ContentPart(
+                kind=ContentKind.TOOL_CALL,
+                tool_call=ToolCallData(
+                    id=tc_data["id"],
+                    name=tc_data["name"],
+                    arguments=tc_data["arguments"],
+                ),
+            ))
+
+        return Response(
+            id=raw_id,
+            model=raw_model,
+            provider="openai",
+            message=Message(role=Role.ASSISTANT, content=parts),
+            finish_reason=FinishReason(reason="stop"),
+            usage=Usage(),
+        )
+
 
     def _parse_response(self, raw: Any) -> Response:
         choice = raw.choices[0] if raw.choices else None

@@ -86,9 +86,13 @@ class Node:
 
     @property
     def handler_type(self) -> str:
-        """Resolve the handler type from explicit type or shape mapping."""
+        """Resolve handler: explicit type= > handler= attr > shape mapping > default."""
         if self.type:
             return self.type
+        # Check handler="" attribute stored in attrs dict
+        handler_attr = self.attrs.get("handler", "")
+        if handler_attr:
+            return handler_attr
         return SHAPE_TO_HANDLER.get(self.shape, "codergen")
 
 

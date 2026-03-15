@@ -1,0 +1,10 @@
+{
+  "fixtures": [
+    {
+      "match": { "userMessage": "Write COMPLETE unit tests" },
+      "response": {
+        "content": "```java\n// filename: SnakeGameTest.java\npublic class SnakeGameTest {\n    public static void main(String[] args) {\n        SnakeGame game = new SnakeGame(20, 20);\n        assert game.getWidth() == 20 : \"Width should be 20\";\n        assert game.getHeight() == 20 : \"Height should be 20\";\n        System.out.println(\"All tests passed!\");\n    }\n}\n```\n\nGOAL_ACHIEVED"
+      }
+    }
+  ]
+}

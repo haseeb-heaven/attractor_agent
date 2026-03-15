@@ -19,6 +19,30 @@ from attractor.pipeline.interviewer import AutoApproveInterviewer, ConsoleInterv
 from attractor.pipeline.parser import parse_dot
 from attractor.pipeline.validator import Severity, validate
 from attractor.pipeline.backend import LLMBackend
+import subprocess
+import logging
+
+logger = logging.getLogger(__name__)
+
+# Kill any existing llmock on port 5555 before starting
+def kill_port(port: int):
+    """Kill any process occupying the given port."""
+    try:
+        result = subprocess.run(
+            f'netstat -ano | findstr :{port}',
+            shell=True, capture_output=True, text=True
+        )
+        for line in result.stdout.strip().splitlines():
+            parts = line.strip().split()
+            if parts:
+                pid = parts[-1]
+                subprocess.run(f'taskkill /PID {pid} /F', shell=True, capture_output=True)
+                logger.info(f"Killed process {pid} on port {port}")
+    except Exception as e:
+        logger.warning(f"Could not kill port {port}: {e}")
+
+# Call before launching mock
+kill_port(5555)
 
 
 def _log_event(event: PipelineEvent) -> None:

@@ -218,6 +218,7 @@ class OpenRouterAdapter(ProviderAdapter):
         kwargs: dict[str, Any] = {
             "model": model,
             "messages": self._build_messages(request),
+			"stream": True,   # ← ADD THIS — llmock always streams
         }
 
         tools = self._build_tools(request)

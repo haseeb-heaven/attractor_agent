@@ -1,0 +1,10 @@
+{
+  "fixtures": [
+    {
+      "match": { "userMessage": "You are a strict code evaluator" },
+      "response": {
+        "content": "{\"score\": 85, \"reason\": \"Code is complete and functional. Snake game logic implemented correctly in Java.\"}"
+      }
+    }
+  ]
+}

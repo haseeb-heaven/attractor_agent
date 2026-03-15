@@ -1,24 +1,10 @@
 {
-  "request": {
-    "messages": [
-      { "role": "user", "content": "*" }
-    ]
-  },
-  "response": {
-    "id": "mock-default-001",
-    "object": "chat.completion",
-    "created": 1710000000,
-    "model": "mock",
-    "choices": [
-      {
-        "index": 0,
-        "message": {
-          "role": "assistant",
-          "content": "Task completed successfully.\n\nGOAL_ACHIEVED"
-        },
-        "finish_reason": "stop"
+  "fixtures": [
+    {
+      "match": { "userMessage": "" },
+      "response": {
+        "content": "Task completed successfully.\n\nGOAL_ACHIEVED"
       }
-    ],
-    "usage": { "prompt_tokens": 10, "completion_tokens": 10, "total_tokens": 20 }
-  }
+    }
+  ]
 }
