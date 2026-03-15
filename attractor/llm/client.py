@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any, AsyncIterator, Callable
+from typing import AsyncIterator, Callable
 
 # Auto-load .env file from the project root (or CWD)
 try:
@@ -102,7 +102,13 @@ class Client:
                 "the project root."
             )
 
-        return cls(providers=providers)
+        # ── Resolve Default Provider ──────────────────────────────────────────
+        default_provider = os.environ.get("DEFAULT_LLM_PROVIDER", "").lower()
+        if default_provider and default_provider not in providers:
+            # Fallback to priority order if specified default is missing
+            default_provider = None
+        
+        return cls(providers=providers, default_provider=default_provider)
 
     def register_provider(self, provider_id: str, adapter: ProviderAdapter) -> None:
         """Register or replace a provider adapter."""
@@ -143,7 +149,11 @@ class Client:
         handler = base_call
         for mw in reversed(self._middleware):
             prev_handler = handler
-            handler = lambda req, _mw=mw, _ph=prev_handler: _mw(req, _ph)
+
+            def wrapped_handler(req: Request, _mw=mw, _ph=prev_handler) -> Response:
+                return _mw(req, _ph)
+
+            handler = wrapped_handler
 
         return handler(request)
 

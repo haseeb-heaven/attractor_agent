@@ -332,10 +332,10 @@ def save_output_files(
                     filename = m.group(1).strip()
                     # Strip the filename comment from saved code
                     code = "\n".join(
-                        l for l in lines
+                        line_content for line_content in lines
                         if not re.match(
                             r'^(?://|#|/\*)\s*filename:',
-                            l.strip(),
+                            line_content.strip(),
                             re.IGNORECASE
                         )
                     ).strip()
@@ -349,6 +349,7 @@ def save_output_files(
 
             fpath = project_dir / filename
             try:
+                os.makedirs(fpath.parent, exist_ok=True)
                 fpath.write_text(code, encoding="utf-8")
                 saved_files.append(fpath)
                 logger.info(f"Saved: {fpath} ({len(code):,} chars)")
@@ -407,8 +408,8 @@ def save_output_files(
     run_cmd = run_instructions.get(language.lower(), "See language documentation.")
 
     readme_lines = [
-        f"# Generated Project\n\n",
-        f"**Built by:** Attractor Agent 🚀\n",
+        "# Generated Project\n\n",
+        "**Built by:** Attractor Agent 🚀\n",
         f"**Language:** {language}\n\n",
         "## Project Files\n\n",
     ]
@@ -421,7 +422,7 @@ def save_output_files(
     try:
         readme_file.write_text("".join(readme_lines), encoding="utf-8")
         logger.info(f"README saved: {readme_file}")
-        console.print(f"  [green]✓[/green] README saved [bold]README.md[/bold]")
+        console.print("  [green]✓[/green] README saved [bold]README.md[/bold]")
     except OSError as e:
         logger.error(f"Failed to save README: {e}")
 

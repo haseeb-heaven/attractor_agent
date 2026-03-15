@@ -8,6 +8,8 @@ from attractor.pipeline.context import Context
 from attractor.pipeline.graph import Node
 
 
+import os
+
 class LLMBackend:
     """Backend for pipeline nodes that uses the Unified LLM Client."""
 
@@ -19,9 +21,18 @@ class LLMBackend:
         # Build simple message list
         messages = [Message.user(prompt)]
         
+        # ── Resolve Model ───────────────────────────────────────────────────
+        # Priority: node attribute > Environment Variable > Global Default
+        model = (
+            node.attrs.get("model") 
+            or node.llm_model 
+            or os.environ.get("DEFAULT_LLM_MODEL")
+            or "gpt-4o-mini" # Last resort default
+        )
+        
         # Create request
         request = Request(
-            model=node.attrs.get("model", ""),  # Use model from DOT node if present
+            model=model,
             messages=messages,
             temperature=float(node.attrs.get("temperature", 0.7)),
         )

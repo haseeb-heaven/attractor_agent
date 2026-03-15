@@ -197,66 +197,69 @@ def start_pipeline(request: str, language: str, framework: str, include_tests: b
     t = threading.Thread(target=run_it, daemon=True)
     t.start()
 
-    # ✅ FIX: Check review gate FIRST before checking done
+    # ✅ REFACTORED: Unified loop for streaming logs + handling human gates
     while True:
-
-        # PRIORITY 1: Human review gate — show buttons
+        # PRIORITY 1: Human review gate — show buttons prominently
         if active_interviewer and active_interviewer.question:
             q = active_interviewer.question
-
-            # Extract clean code from review prompt
-            code_text = q.text.replace("Review the generated code:\n\n", "").strip()
-            match = re.search(r"```[a-zA-Z0-9+\-#]*\s*(.*?)```", code_text, re.DOTALL)
+            
+            # Extract clean code if this is a code review prompt
+            code_text = q.text
+            match = re.search(r"```[a-zA-Z0-9+\-#]*\s*(.*?)```", q.text, re.DOTALL)
             if match:
                 code_text = match.group(1).strip()
-
-            # Show code + make buttons visible
+            
+            # Update UI: Show the question in logs and make buttons visible
             yield (
-                "\n".join(logs),
+                "\n".join(logs) + f"\n\n👉 ACTION REQUIRED: {q.text[:200]}...",
                 code_text,
                 gr.update(visible=True, interactive=True),
                 gr.update(visible=True, interactive=True)
             )
 
-            # Wait for user to click approve or retry
+            # Wait for user input via button click
             while active_interviewer and active_interviewer.question:
-                time.sleep(0.3)
-
+                time.sleep(0.5)
+            
             logs.append("✅ Human responded — continuing pipeline.")
+            # Hide buttons immediately after response
             yield "\n".join(logs), code_text, gr.update(visible=False), gr.update(visible=False)
 
         # PRIORITY 2: Pipeline finished
-        elif not t.is_alive() and result_container:
+        elif not t.is_alive():
             break
 
-        # PRIORITY 3: Still running — stream logs
+        # PRIORITY 3: Still running — stream latest logs
         else:
+            # When running normally, ensure buttons stay hidden
             yield "\n".join(logs), "", gr.update(visible=False), gr.update(visible=False)
             time.sleep(1.0)
 
-    # Guard against thread crash
+    # ── Post-Execution Visualization ──────────────────────────────────────────
     if not result_container:
-        logs.append("❌ Pipeline crashed with no result.")
+        logs.append("❌ Pipeline crashed or yielded no results.")
         yield "\n".join(logs), "", gr.update(visible=False), gr.update(visible=False)
         return
 
     result = result_container[0]
-
     if result.success:
-        output = result.context.get_string("last_response", "")
+        # Final response extraction
+        output = result.context.get_string("last_response", "Pipeline completed successfully.")
         code = output
-
         match = re.search(r"```[a-zA-Z0-9+\-#]*\s*(.*?)```", output, re.DOTALL)
         if match:
             code = match.group(1).strip()
 
         app_file = project_dir / app_file_name
-        app_file.write_text(code, encoding="utf-8")
-        logs.append(f"\n🎉 Saved to: {app_file}")
+        try:
+            app_file.write_text(code, encoding="utf-8")
+            logs.append(f"\n🎉 Deployment successful! Final code saved to: {app_file}")
+        except Exception as e:
+            logs.append(f"\n⚠️ Could not save file: {e}")
 
         yield "\n".join(logs), code, gr.update(visible=False), gr.update(visible=False)
     else:
-        logs.append(f"\n❌ Error: {result.error}")
+        logs.append(f"\n❌ Pipeline failed: {result.error}")
         yield "\n".join(logs), "", gr.update(visible=False), gr.update(visible=False)
 
 

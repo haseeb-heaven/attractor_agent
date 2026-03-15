@@ -47,6 +47,14 @@ class Context:
         with self._lock:
             return self._values.get(key, default)
 
+    def keys(self) -> list[str]:
+        with self._lock:
+            return list(self._values.keys())
+
+    def items(self) -> list[tuple[str, Any]]:
+        with self._lock:
+            return list(self._values.items())
+
     def get_string(self, key: str, default: str = "") -> str:
         value = self.get(key)
         if value is None:

@@ -6,31 +6,32 @@ from attractor.agent.config import SessionConfig
 
 
 def truncate_output(output: str, max_chars: int, mode: str = "head_tail") -> str:
-    """Character-based truncation using head/tail split.
-
-    Always runs first as the primary safeguard (handles pathological
-    cases like a 2-line CSV where each line is 10MB).
-    """
+    """Character-based truncation (Section 5.1)."""
     if len(output) <= max_chars:
         return output
 
-    head_size = max_chars // 2
-    tail_size = max_chars - head_size
-    omitted = len(output) - head_size - tail_size
+    removed = len(output) - max_chars
 
+    if mode == "head_tail":
+        half = max_chars // 2
+        return (
+            output[:half]
+            + f"\n\n[WARNING: Tool output was truncated. {removed} characters were removed from the middle. "
+            "The full output is available in the event stream. "
+            "If you need to see specific parts, re-run the tool with more targeted parameters.]\n\n"
+            + output[-half:]
+        )
+
+    # Default to tail truncation
     return (
-        output[:head_size]
-        + f"\n\n[WARNING: Tool output was truncated. {omitted} characters removed "
-        f"from the middle of the output.]\n\n"
-        + output[-tail_size:]
+        f"[WARNING: Tool output was truncated. First {removed} characters were removed. "
+        "The full output is available in the event stream.]\n\n"
+        + output[-max_chars:]
     )
 
 
 def truncate_lines(output: str, max_lines: int) -> str:
-    """Line-based truncation using head/tail split.
-
-    Secondary pass that runs after character truncation for readability.
-    """
+    """Line-based truncation (Section 5.3)."""
     lines = output.split("\n")
     if len(lines) <= max_lines:
         return output
@@ -49,46 +50,50 @@ def truncate_lines(output: str, max_lines: int) -> str:
 def truncate_tool_output(
     output: str,
     tool_name: str,
-    config: SessionConfig | None = None,
+    config: SessionConfig,
 ) -> str:
-    """Full truncation pipeline for tool output.
-
-    Step 1: Character-based truncation (always runs first)
-    Step 2: Line-based truncation (for readability)
-    """
-    if config is None:
-        config = SessionConfig()
-
-    # Default character limits
+    """Full truncation pipeline (Section 5.3)."""
+    # Section 5.2 defaults
     default_char_limits = {
         "read_file": 50_000,
         "shell": 30_000,
         "grep": 20_000,
-        "glob": 10_000,
+        "glob": 20_000,
         "edit_file": 10_000,
-        "write_file": 10_000,
+        "apply_patch": 10_000,
+        "write_file": 1_000,
+        "spawn_agent": 20_000,
+    }
+    
+    default_modes = {
+        "read_file": "head_tail",
+        "shell": "head_tail",
+        "grep": "tail",
+        "glob": "tail",
+        "edit_file": "tail",
+        "apply_patch": "tail",
+        "write_file": "tail",
+        "spawn_agent": "head_tail",
     }
 
-    # Default line limits
-    default_line_limits: dict[str, int | None] = {
+    default_line_limits = {
         "shell": 256,
         "grep": 200,
         "glob": 500,
-        "read_file": None,
-        "edit_file": None,
     }
 
-    # Step 1: Character-based truncation
+    # Step 1: Character-based truncation (always runs first)
     max_chars = config.tool_output_limits.get(
         tool_name, default_char_limits.get(tool_name, 30_000)
     )
-    result = truncate_output(output, max_chars)
+    mode = default_modes.get(tool_name, "tail")
+    result = truncate_output(output, max_chars, mode)
 
-    # Step 2: Line-based truncation
-    line_limit = config.tool_line_limits.get(
+    # Step 2: Line-based truncation (secondary)
+    max_lines = config.tool_line_limits.get(
         tool_name, default_line_limits.get(tool_name)
     )
-    if line_limit is not None:
-        result = truncate_lines(result, line_limit)
+    if max_lines is not None:
+        result = truncate_lines(result, max_lines)
 
     return result
