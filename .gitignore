@@ -20,6 +20,8 @@ env/
 .idea/
 *.swp
 *.swo
+/projects
+*.log
 
 # Testing
 .pytest_cache/

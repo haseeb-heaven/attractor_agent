@@ -129,9 +129,17 @@ class WaitForHumanHandler(Handler):
                 key = accel_match.group(1).lower()
             options.append(Option(label=label, key=key or str(i + 1)))
 
+        # Expand variables
+        prompt_text = node.prompt or node.label or f"Review step: {node.id}"
+        prompt_text = re.sub(
+            r"\$\{([^}]+)\}",
+            lambda m: context.get_string(m.group(1), f"${{{m.group(1)}}}"),
+            prompt_text,
+        )
+
         question = Question(
             id=f"q_{node.id}_{int(time.time())}",
-            text=node.prompt or node.label or f"Review step: {node.id}",
+            text=prompt_text,
             options=options,
             node_id=node.id,
         )
