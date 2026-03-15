@@ -25,7 +25,7 @@ from attractor.pipeline.backend import LLMBackend
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     handlers=[
         RichHandler(rich_tracebacks=True, show_path=False),
@@ -767,15 +767,88 @@ def run_cli() -> None:
         console.print(
             "\n[bold yellow]🚀 Starting Mock LLM server on port 5555...[/bold yellow]"
         )
-        logger.info("Launching mock LLM: npx -y @copilotkit/llmock --port 5555")
+        logger.info("Launching mock LLM: node run-mock.mjs")
 
         # Use shell=True with a string command — fixes Windows npx.cmd issue
+        # Create fixed launcher
+        launcher = Path("run-mock.mjs")
+        # launcher.write_text(r'''
+		# 	import http from "http";
+
+		# 	const port = 5555;
+
+		# 	const server = http.createServer((req, res) => {
+		# 	  if (req.method === "POST" && req.url === "/v1/chat/completions") {
+
+		# 	    let body = "";
+
+		# 	    req.on("data", chunk => {
+		# 	      body += chunk;
+		# 	    });
+
+		# 	    req.on("end", () => {
+
+		# 	      const response = {
+		# 	        id: "mock-123",
+		# 	        object: "chat.completion",
+		# 	        created: Date.now(),
+		# 	        model: "mock-model",
+		# 	        choices: [
+		# 	          {
+		# 	            index: 0,
+		# 	            message: {
+		# 	              role: "assistant",
+		# 	              content: `
+		# 	Project architecture:
+
+		# 	src/
+		# 	  main.js
+		# 	  db.js
+		# 	  routes.js
+
+		# 	Dependencies:
+		# 	express
+		# 	sqlite3
+		# 	jsonwebtoken
+		# 	`
+		# 	            },
+		# 	            finish_reason: "stop"
+		# 	          }
+		# 	        ],
+		# 	        usage: {
+		# 	          prompt_tokens: 10,
+		# 	          completion_tokens: 20,
+		# 	          total_tokens: 30
+		# 	        }
+		# 	      };
+
+		# 	      res.writeHead(200, {
+		# 	        "Content-Type": "application/json"
+		# 	      });
+
+		# 	      res.end(JSON.stringify(response));
+
+		# 	    });
+
+		# 	  } else {
+
+		# 	    res.writeHead(404);
+		# 	    res.end();
+
+		# 	  }
+		# 	});
+
+		# 	server.listen(port, () => {
+		# 	  console.log("Mock OpenAI server running on port", port);
+		# 	});
+		# 	''')
+
         mock_process = subprocess.Popen(
-            "npx -y @copilotkit/llmock --port 5555",
-            shell=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE
+            ["node", "run-mock.mjs"],
+            stdout=None,
+            stderr=None
         )
+
         # Ensure mock server is killed when CLI exits
         atexit.register(lambda: mock_process.terminate())
 
@@ -793,7 +866,8 @@ def run_cli() -> None:
 
         mock_adapter = OpenAIAdapter(
             api_key="mock-key",
-            base_url="http://localhost:5555/v1"
+            base_url="http://localhost:5555/v1",
+			stream=False
         )
         client = Client(providers={"mock": mock_adapter}, default_provider="mock")
         backend = LLMBackend(client=client)

@@ -136,7 +136,7 @@ def start_pipeline(request: str, language: str, framework: str, include_tests: b
         
         # Start llmock as a subprocess using shell=True string for Windows compatibility
         mock_process = subprocess.Popen(
-            "npx -y @copilotkit/llmock --port 5555",
+            "npx -y @copilotkit/llmock --port 5555 --fixtures ./fixtures",
             shell=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE

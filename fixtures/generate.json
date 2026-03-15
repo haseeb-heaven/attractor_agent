@@ -1,24 +1,12 @@
 {
-  "request": {
-    "messages": [
-      { "role": "user", "content": "Using the plan above*" }
-    ]
-  },
-  "response": {
-    "id": "mock-generate-001",
-    "object": "chat.completion",
-    "created": 1710000000,
-    "model": "mock",
-    "choices": [
-      {
-        "index": 0,
-        "message": {
-          "role": "assistant",
-          "content": "```java\n// filename: GameConfig.java\npublic class GameConfig {\n    public static final int TILE_SIZE = 20;\n    public static final int BOARD_WIDTH = 600;\n    public static final int BOARD_HEIGHT = 600;\n    public static final int COLS = BOARD_WIDTH / TILE_SIZE;\n    public static final int ROWS = BOARD_HEIGHT / TILE_SIZE;\n    public static final int GAME_SPEED = 120;\n    public static final String DB_PATH = \"snake_scores.db\";\n}\n```\n\n```java\n// filename: Database.java\nimport java.sql.*;\nimport java.util.*;\nimport java.util.logging.*;\n\npublic class Database {\n    private static final Logger log = Logger.getLogger(Database.class.getName());\n    private Connection conn;\n\n    public Database() {\n        try {\n            conn = DriverManager.getConnection(\"jdbc:sqlite:\" + GameConfig.DB_PATH);\n            conn.createStatement().execute(\n                \"CREATE TABLE IF NOT EXISTS high_scores (\" +\n                \"id INTEGER PRIMARY KEY AUTOINCREMENT,\" +\n                \"player TEXT NOT NULL DEFAULT 'Player',\" +\n                \"score INTEGER NOT NULL,\" +\n                \"played_at TEXT NOT NULL DEFAULT (datetime('now')))\");\n            log.info(\"DB ready\");\n        } catch (SQLException e) { log.severe(e.getMessage()); }\n    }\n\n    public void saveScore(String player, int score) {\n        try (PreparedStatement ps = conn.prepareStatement(\n                \"INSERT INTO high_scores (player,score) VALUES (?,?)\")) {\n            ps.setString(1, player); ps.setInt(2, score); ps.executeUpdate();\n        } catch (SQLException e) { log.warning(e.getMessage()); }\n    }\n\n    public List<String[]> getTopScores(int limit) {\n        List<String[]> list = new ArrayList<>();\n        try (PreparedStatement ps = conn.prepareStatement(\n                \"SELECT player,score,played_at FROM high_scores ORDER BY score DESC LIMIT ?\")) {\n            ps.setInt(1, limit);\n            ResultSet rs = ps.executeQuery();\n            while (rs.next()) list.add(new String[]{rs.getString(1),rs.getString(2),rs.getString(3)});\n        } catch (SQLException e) { log.warning(e.getMessage()); }\n        return list;\n    }\n\n    public void close() { try { if(conn!=null) conn.close(); } catch(SQLException ignored){} }\n}\n```\n\n```java\n// filename: Main.java\nimport javax.swing.*;\nimport java.util.logging.*;\n\npublic class Main {\n    private static final Logger log = Logger.getLogger(Main.class.getName());\n\n    public static void main(String[] args) {\n        Logger.getLogger(\"\").setLevel(Level.INFO);\n        SwingUtilities.invokeLater(() -> {\n            log.info(\"Snake Game starting\");\n            Database db = new Database();\n            SoundManager sound = new SoundManager();\n            JFrame frame = new JFrame(\"Snake Game\");\n            frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);\n            GamePanel panel = new GamePanel(db, sound);\n            frame.add(panel);\n            frame.pack();\n            frame.setLocationRelativeTo(null);\n            frame.setVisible(true);\n            panel.requestFocusInWindow();\n            log.info(\"Snake Game started\");\n        });\n    }\n}\n```\n\nGOAL_ACHIEVED"
-        },
-        "finish_reason": "stop"
-      }
-    ],
-    "usage": { "prompt_tokens": 30, "completion_tokens": 200, "total_tokens": 230 }
-  }
+	"fixtures": [
+		{
+			"match": {
+				"userMessage": "Make this one single file javascript code and html and css only basic login register page like this"
+			},
+			"response": {
+				"content": "index.html\n<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"UTF-8\">\n<title>Login Register</title>\n<link rel=\"stylesheet\" href=\"style.css\">\n</head>\n<body>\n<div class=\"container\">\n<h2>Login</h2>\n<form id=\"loginForm\">\n<input type=\"text\" id=\"loginUsername\" placeholder=\"Username\" required>\n<input type=\"password\" id=\"loginPassword\" placeholder=\"Password\" required>\n<button type=\"submit\">Login</button>\n</form>\n<p id=\"loginMsg\"></p>\n<p>Don't have an account? <a href=\"#\" id=\"showRegister\">Register</a></p>\n</div>\n<div class=\"container\" id=\"registerContainer\" style=\"display:none;\">\n<h2>Register</h2>\n<form id=\"registerForm\">\n<input type=\"text\" id=\"regUsername\" placeholder=\"Username\" required>\n<input type=\"email\" id=\"regEmail\" placeholder=\"Email\" required>\n<input type=\"password\" id=\"regPassword\" placeholder=\"Password\" required>\n<button type=\"submit\">Register</button>\n</form>\n<p id=\"regMsg\"></p>\n<p>Already have an account? <a href=\"#\" id=\"showLogin\">Login</a></p>\n</div>\n<script src=\"script.js\"></script>\n</body>\n</html>\nstyle.css\n/* CSS */\nbody{font-family:Arial,sans-serif;background:#f0f0f0;margin:0;display:flex;justify-content:center;align-items:center;height:100vh}\n.container{background:#fff;padding:20px;border-radius:8px;box-shadow:0 0 10px rgba(0,0,0,.1);width:300px}\ninput{width:100%;padding:10px;margin:10px 0;border:1px solid #ccc;border-radius:4px}\nbutton{width:100%;padding:10px;background:#007bff;color:#fff;border:none;border-radius:4px;cursor:pointer}\nbutton:hover{background:#0056b3}\na{color:#007bff;text-decoration:none}\na:hover{text-decoration:underline}\nscript.js\n/* JS */\ndocument.getElementById('showRegister').addEventListener('click',function(e){e.preventDefault();document.querySelector('.container').style.display='none';document.getElementById('registerContainer').style.display='block';});\ndocument.getElementById('showLogin').addEventListener('click',function(e){e.preventDefault();document.querySelector('.container').style.display='block';document.getElementById('registerContainer').style.display='none';});\ndocument.getElementById('loginForm').addEventListener('submit',function(e){e.preventDefault();const u=document.getElementById('loginUsername').value;const p=document.getElementById('loginPassword').value;if(u && p){alert('Login success');document.getElementById('loginMsg').textContent='Logged in as '+u;}else{alert('Fill fields');}});\ndocument.getElementById('registerForm').addEventListener('submit',function(e){e.preventDefault();const u=document.getElementById('regUsername').value;const e=document.getElementById('regEmail').value;const p=document.getElementById('regPassword').value;if(u && e && p){alert('Registered');document.getElementById('regMsg').textContent='Registration successful';}else{alert('Fill all fields');}});"
+			}
+		}
+	]
 }

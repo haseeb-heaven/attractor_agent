@@ -36,6 +36,7 @@ class OpenAIAdapter(ProviderAdapter):
         base_url: str | None = None,
         organization: str | None = None,
         timeout: float = 120.0,
+		stream: bool = False,
     ):
         self._api_key = api_key or os.environ.get("OPENAI_API_KEY")
         if not self._api_key:
@@ -45,6 +46,7 @@ class OpenAIAdapter(ProviderAdapter):
         )
         self._organization = organization or os.environ.get("OPENAI_ORG_ID")
         self._timeout = timeout
+        self._stream = stream
         self._client: Any = None
 
     def _ensure_client(self) -> Any:
