@@ -2,20 +2,19 @@
 
 from __future__ import annotations
 
-import json
-import os
 import re
 import subprocess
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 from attractor.pipeline.context import Context, Outcome, StageStatus
 from attractor.pipeline.events import EventEmitter, PipelineEventKind
-from attractor.pipeline.graph import Edge, Graph, Node
-from attractor.pipeline.handlers.base import Handler
+from attractor.pipeline.graph import Graph, Node
+from attractor.pipeline.handlers.base import Handler, HandlerRegistry
+from attractor.pipeline.handlers.scoring import SatisfactionScorerHandler
+from attractor.pipeline.handlers.testing import TestExecutionHandler
+from attractor.pipeline.handlers.twin import DigitalTwinHandler
 from attractor.pipeline.interviewer import (
-    Answer,
     Interviewer,
     Option,
     Question,
@@ -188,7 +187,7 @@ class ParallelHandler(Handler):
             return Outcome(status=StageStatus.SUCCESS)
 
         # Get join policy
-        allow_partial = node.allow_partial
+        # Get join policy
 
         emitter.emit_simple(
             PipelineEventKind.PARALLEL_STARTED,
@@ -302,9 +301,8 @@ class ManagerLoopHandler(Handler):
         return Outcome(status=StageStatus.SUCCESS)
 
 
-def create_default_registry() -> "HandlerRegistry":
+def create_default_registry() -> HandlerRegistry:
     """Create a HandlerRegistry with all built-in handlers registered."""
-    from attractor.pipeline.handlers.base import HandlerRegistry
 
     registry = HandlerRegistry()
     registry.register("start", StartHandler())
@@ -316,6 +314,11 @@ def create_default_registry() -> "HandlerRegistry":
     registry.register("parallel.fan_in", FanInHandler())
     registry.register("tool", ToolHandler())
     registry.register("stack.manager_loop", ManagerLoopHandler())
+    
+    # New Handlers
+    registry.register("test_runner", TestExecutionHandler())
+    registry.register("digital_twin", DigitalTwinHandler())
+    registry.register("satisfaction_scorer", SatisfactionScorerHandler())
 
     # Default handler for unknown types — use codergen
     registry.set_default(CodergenHandler())

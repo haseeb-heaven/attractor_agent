@@ -16,14 +16,14 @@ from typing import Any
 
 from attractor.pipeline.conditions import evaluate_condition
 from attractor.pipeline.context import Checkpoint, Context, Outcome, StageStatus
-from attractor.pipeline.events import EventEmitter, PipelineEvent, PipelineEventKind
+from attractor.pipeline.events import EventEmitter, PipelineEventKind
 from attractor.pipeline.graph import Edge, Graph, Node
-from attractor.pipeline.handlers.base import Handler, HandlerRegistry
+from attractor.pipeline.handlers.base import Handler
 from attractor.pipeline.handlers.builtin import create_default_registry
 from attractor.pipeline.interviewer import AutoApproveInterviewer, Interviewer
 from attractor.pipeline.parser import parse_dot
 from attractor.pipeline.retry import RetryPolicy, RETRY_STANDARD
-from attractor.pipeline.transforms import TransformRegistry, create_default_transforms
+from attractor.pipeline.transforms import create_default_transforms
 from attractor.pipeline.validator import validate_or_raise
 
 
@@ -388,6 +388,7 @@ def _execute_with_retry(
     """Execute a handler with the appropriate kwargs."""
     kwargs: dict[str, Any] = {
         "interviewer": interviewer,
+        "config": config,
     }
     if config.codergen_backend:
         kwargs["codergen_backend"] = config.codergen_backend

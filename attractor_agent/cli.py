@@ -210,7 +210,7 @@ def build_dot(request: str, language: str, framework: str,
         goal_gate=true
     ];
 
-    TestGate [shape=diamond, label="Tests Pass?"];
+    RunTests [handler="test_runner", label="Execute Tests", max_retries=2];
 '''
 
     if include_sdlc:
@@ -223,30 +223,34 @@ def build_dot(request: str, language: str, framework: str,
 '''
 
     dot += '''
+    Score [handler="satisfaction_scorer", label="Satisfaction Scorer"];
+    DeployTwin [handler="digital_twin", label="Deploy to Digital Twin Universe"];
     Review [shape=hexagon, label="Human Review"];
 
     Start -> Plan -> Generate;
 '''
 
     if include_tests:
-        dot += '''    Generate -> Tests -> TestGate;
-    TestGate -> Review [label="pass", condition="outcome=success"];
-    TestGate -> Generate [label="retry", condition="outcome=fail"];
+        dot += '''    Generate -> Tests -> RunTests;
+    RunTests -> Score [label="pass", condition="outcome=success"];
+    RunTests -> Generate [label="retry_code", condition="outcome=fail"];
 '''
     else:
-        dot += '''    Generate -> Review;
+        dot += '''    Generate -> Score;
 '''
 
     if include_sdlc:
-        dot += '''    Review -> SDLCCheck [label="[A]pprove"];
-    SDLCCheck -> Done [condition="outcome=success"];
+        dot += '''    Score -> SDLCCheck;
+    SDLCCheck -> Review [condition="outcome=success"];
     SDLCCheck -> Generate [condition="outcome=fail", label="[F]ix"];
 '''
     else:
-        dot += '''    Review -> Done [label="[A]pprove"];
+        dot += '''    Score -> Review;
 '''
 
-    dot += '''    Review -> Generate [label="[R]etry"];
+    dot += '''    Review -> DeployTwin [label="[A]pprove"];
+    DeployTwin -> Done;
+    Review -> Generate [label="[R]etry"];
 }
 '''
     return dot
