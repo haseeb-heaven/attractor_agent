@@ -18,8 +18,11 @@ pip install -r requirements.txt
 pip install -e .[dev]
 ```
 
+LiteLLM dependency is pinned to a recent release (`litellm>=1.82.1`).
+Reference docs: https://docs.litellm.ai/docs/
+
 Set your LLM credentials in `.env` when you are not using the mock server.
-Supported providers: OpenRouter (`OPENROUTER_API_KEY`), OpenAI (`OPENAI_API_KEY`), Groq (`GROQ_API_KEY`), Anthropic (`ANTHROPIC_API_KEY`), Gemini (`GEMINI_API_KEY` or `GOOGLE_API_KEY`).
+This project is now LiteLLM-only. Configure at minimum `LITELLM_MODEL`, and set `LITELLM_API_KEY` and/or `LITELLM_BASE_URL` depending on your LiteLLM setup.
 
 ## CLI
 

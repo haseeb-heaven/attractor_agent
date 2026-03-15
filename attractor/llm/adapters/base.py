@@ -14,7 +14,7 @@ class ProviderAdapter(abc.ABC):
     @property
     @abc.abstractmethod
     def provider_id(self) -> str:
-        """Unique provider identifier (e.g., 'openai', 'anthropic', 'gemini')."""
+        """Unique provider identifier (e.g., 'litellm')."""
         ...
 
     @abc.abstractmethod

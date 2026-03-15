@@ -60,13 +60,13 @@ def create_backend(use_mock: bool) -> tuple[LLMBackend, Callable[[], None]]:
     server = MockServer()
     server.start()
 
-    from attractor.llm.adapters.openai import OpenAIAdapter
+    from attractor.llm.adapters.litellm import LiteLLMAdapter
     from attractor.llm.client import Client
 
-    mock_adapter = OpenAIAdapter(
+    mock_adapter = LiteLLMAdapter(
         api_key="mock-key",
-        base_url="http://127.0.0.1:5555/v1",
-        stream=False,
+        api_base="http://127.0.0.1:5555/v1",
+        default_model="openai/gpt-4o-mini",
     )
     client = Client(providers={"mock": mock_adapter}, default_provider="mock")
     return LLMBackend(client=client), server.stop

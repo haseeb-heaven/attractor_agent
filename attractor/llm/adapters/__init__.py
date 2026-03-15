@@ -1,1 +1,1 @@
-"""Provider adapter init."""
+"""Provider adapters package (LiteLLM only)."""
