@@ -1,6 +1,6 @@
 # 🚀 Attractor Agent
 
-**Attractor Agent** is a cutting-edge, conversational AI developer that transforms high-level project ideas into fully functional, production-ready codebases. Powered by the **Attractor Pipeline Engine**, it handles the entire Software Development Life Cycle (SDLC) — from architecture planning and code generation to unit testing and automated deployment.
+**Attractor Agent** is a cutting-edge, conversational AI developer that transforms high-level project ideas into fully functional, production-ready codebases. Powered by the **Attractor Pipeline Engine**, it handles the entire Software Development Life Cycle (SDLC) — from architecture planning and code generation to unit testing and automated self-healing loops.
 
 ---
 
@@ -8,13 +8,13 @@
 
 - **💬 Conversational UI**: Simply describe what you want to build in plain English.
 - **🏗️ Automated SDLC**: Automatically generates complex `.dot` pipeline graphs that orchestrate multiple LLM agents.
-- **📈 Live Progress Tracker**: Watch every step (Plan → Generate → Test → Score → Deploy) in real-time.
-- **🖥️ Dual Interface**: Choose between a high-performance **CLI** or a sleek **Web GUI**.
-- **📋 Conformance Suite**: Rigorous validation ensuring the engine follows [NLSpec](attractor-spec.md) for routing and retries.
-- **🧪 Real Test Execution**: Physically runs generated unit tests (`pytest`, `npm test`, etc.) in a sandbox to verify code.
-- **📊 Satisfaction Scorer**: Quantitative LLM-as-a-judge scoring of generated artifacts against goals.
+- **🔄 Self-Healing Loop**: Autonomous **Observe → Plan → Code → Test → Fix → Score → Converge** cycle to ensure 100% bug-free delivery.
+- **📈 Live Progress Tracker**: Watch every stage in real-time with event streaming.
+- **🖥️ Multi-Interface**: High-performance **CLI**, sleek **Web GUI**, and a robust **REST API**.
+- **📋 Conformance Suite**: 100% spec-compliant engine following [NLSpec](attractor-spec.md) for routing, tiebreaks, and goal-gates.
+- **🧪 Real Test Execution**: Physically executes generated code and tests in a sandbox.
+- **📊 Satisfaction Scorer**: Quantitative LLM-as-a-judge scoring with configurable thresholds.
 - **🗄️ Persistence Layer**: Production-ready storage supporting both **SQLite** and **MongoDB**.
-- **🎭 LLMock Automation**: Full zero-config support for local, deterministic testing with [LLMock](https://llmock.copilotkit.dev/).
 
 ---
 
@@ -30,7 +30,7 @@ pip install -r requirements.txt
 
 ### 🔑 Configuration
 
-Create a `.env` file in the root directory and add your OpenRouter API key:
+Create a `.env` file in the root directory:
 
 ```env
 OPENROUTER_API_KEY=your_key_here
@@ -45,26 +45,35 @@ ATTRACTOR_DB=sqlite
 ## 🚀 How to Use
 
 ### 📟 Method 1: Interactive CLI
-For a fast, terminal-based experience with loading spinners and rich formatting:
+For a terminal-based experience with loading spinners and rich formatting:
 
 ```bash
+# Start interactive builder
 python -m attractor_agent
+
+# Run a specific pipeline directly
+python -m attractor_agent examples/full_sdlc.dot
 ```
 
 ### 🌐 Method 2: Web Interface (GUI)
-For a visual experience with a centered layout and real-time code editor:
+For a visual experience with a real-time code editor and human-in-the-loop review:
 
 ```bash
-python -m attractor_agent --gui --port 7860
+python -m attractor_agent --gui
 ```
 
 ### 🔌 Method 3: REST API (Headless)
-For integrating Attractor into your own services or running as a backend:
+For integrating Attractor into your own services:
 
 ```bash
-python -m attractor_agent --api --port 8000
+python -m attractor_agent --api
 ```
-Swagger documentation will be available at `http://localhost:8000/docs`.
+
+#### API Endpoints (Section 9.5)
+- `POST /api/v1/runs`: Start a new project from a prompt.
+- `POST /pipelines`: Submit a raw `.dot` pipeline file.
+- `GET /pipelines/{run_id}`: Monitor status and health (RUNNING, COMPLETED, FAILED).
+- `GET /api/v1/runs/{run_id}/events`: SSE stream of real-time pipeline events.
 
 ---
 
@@ -77,36 +86,40 @@ The fastest way to stand up a production environment with MongoDB persistence:
    ```bash
    docker-compose up -d
    ```
-This starts the **Attractor API** on port `8000` and a **MongoDB** instance for persistence.
 
 ---
 
 ## 🏗️ Project Architecture
 
-### The Advanced SDLC Pipeline
-Attractor uses a state-of-the-art graph-based execution model:
-1. **Plan Architecture**: LLM outlines the structure and file signatures.
-2. **Generate Code**: Core implementation logic.
-3. **Unit Tests**: Generates comprehensive testing suites.
-4. **Run Tests**: **(Physical Execution)** Runs the scripts in a sandbox. Fails if code is buggy.
-5. **Satisfaction Score**: Quantitative grading of the output (0-100).
-6. **SDLC Validation**: Technical review for security and robust error handling.
-7. **Human Review**: Final inspection and approval.
-8. **Digital Twin**: Registers finalized code into the mock deployment "Universe".
+### The Self-Healing SDLC Loop
+Attractor pipelines often implement a gated feedback loop:
+1. **Plan**: LLM outlines the implementation strategy.
+2. **Generate**: Core code implementation.
+3. **RunTests**: Executes code and captures diagnostics (return codes, tracebacks).
+4. **Diagnose**: Analyzes test failures and pinpoints root causes.
+5. **TargetedFix**: Generates focused patches based on diagnosis.
+6. **Scorer**: Grades the fixed code (0-100).
+7. **Converge**: Exits only when tests pass AND score ≥ 95.
 
 ### Persistence & Storage
-Runs and events are automatically persisted to the database layer.
-- **SQLite**: Default for local development (`attractor_runs.db`).
-- **MongoDB**: Used for production scale (enabled via `ATTRACTOR_DB=mongodb`).
+- **Local**: SQLite (`attractor_runs.db`) is used by default.
+- **Scale**: Enable MongoDB via `ATTRACTOR_DB=mongodb`.
+- **Logs**: All run data is stored in `projects/{run_id}/`.
 
 ---
 
-## 🧪 Running Tests
+## 🧪 Testing
 
-To verify the Attractor engine follows the NLSpec strictly, run the conformance suite:
-
+### Reliability Suite
+Run the full conformance and engine test suite:
 ```bash
-python -m pytest tests/test_conformance.py
+python -m pytest tests/
+```
+
+### Production Readiness
+Run the comprehensive end-to-end production check (CLI, API, and Persistence):
+```bash
+python tests/test_production.py
 ```
 
 ---

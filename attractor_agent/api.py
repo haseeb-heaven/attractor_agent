@@ -13,6 +13,11 @@ from fastapi.responses import StreamingResponse
 import asyncio
 import json
 import time
+from pathlib import Path
+
+LOGS_DIR = Path("projects")
+if not LOGS_DIR.exists():
+    LOGS_DIR.mkdir(parents=True, exist_ok=True)
 
 app = FastAPI(title="Attractor API", version="1.0.0")
 
@@ -43,6 +48,21 @@ class RunDetail(BaseModel):
     status: str
     final_node: Optional[str]
     events: List[EventSnapshot]
+
+
+@app.get("/pipelines/{run_id}")
+async def get_pipeline_status(run_id: str):
+    run_dir = LOGS_DIR / run_id
+    if not run_dir.exists():
+        raise HTTPException(404, "Run not found")
+    
+    status_file = run_dir / "status.json"
+    if status_file.exists():
+        status = json.loads(status_file.read_text())
+        return {"run_id": run_id, "status": status.get("status", "UNKNOWN")}
+    return {"run_id": run_id, "status": "RUNNING"}
+
+
 
 # --- Database Integration ---
 
@@ -112,6 +132,12 @@ def execute_pipeline_task(run_id: str, prompt: str, language: str, include_tests
     try:
         result = run_pipeline(dot, config=config, emitter=emitter)
         status = "COMPLETED" if result.success else "FAILED"
+        
+        # Write status file for /pipelines/{id}
+        run_dir = LOGS_DIR / run_id
+        run_dir.mkdir(parents=True, exist_ok=True)
+        (run_dir / "status.json").write_text(json.dumps({"status": status}))
+
         db.update_run(
             run_id,
             status=status,
@@ -139,6 +165,10 @@ async def create_run(request: PipelineRequest, background_tasks: BackgroundTasks
         config=request.dict()
     )
     
+    # Create directory immediately so /pipelines/{id} works (monitoring)
+    run_dir = LOGS_DIR / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    
     # Start background task
     background_tasks.add_task(
         execute_pipeline_task,
@@ -165,11 +195,24 @@ async def create_run_from_dot(background_tasks: BackgroundTasks, request: Reques
     # Save initial run record
     db.save_run(run_id, goal="DOT Pipeline", config={"source": "direct_dot"})
     
+    # Create directory immediately so /pipelines/{id} works (monitoring)
+    run_dir = LOGS_DIR / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    
     # Background execute
     def run_it():
         try:
-            result = run_pipeline(source, config=PipelineConfig(), emitter=emitter)
+            # Setup Config with checkpoint_dir
+            config = PipelineConfig(checkpoint_dir=str(LOGS_DIR / run_id))
+            
+            result = run_pipeline(source, config=config, emitter=emitter)
             status = "COMPLETED" if result.success else "FAILED"
+            
+            # Write status file for /pipelines/{id}
+            run_dir = LOGS_DIR / run_id
+            run_dir.mkdir(parents=True, exist_ok=True)
+            (run_dir / "status.json").write_text(json.dumps({"status": status}))
+
             db.update_run(run_id, status=status, final_node=result.final_node, result={"success": result.success})
         except Exception as e:
             db.update_run(run_id, status="ERROR", final_node="", result={"error": str(e)})
