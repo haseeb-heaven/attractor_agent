@@ -57,8 +57,9 @@ class Client:
         Provider detection order (first found becomes the default):
           1. OpenRouter  (OPENROUTER_API_KEY)
           2. OpenAI      (OPENAI_API_KEY)
-          3. Anthropic   (ANTHROPIC_API_KEY)
-          4. Gemini      (GEMINI_API_KEY / GOOGLE_API_KEY)
+          3. Groq        (GROQ_API_KEY)
+          4. Anthropic   (ANTHROPIC_API_KEY)
+          5. Gemini      (GEMINI_API_KEY / GOOGLE_API_KEY)
         """
         providers: dict[str, ProviderAdapter] = {}
 
@@ -75,6 +76,14 @@ class Client:
             try:
                 from attractor.llm.adapters.openai import OpenAIAdapter
                 providers["openai"] = OpenAIAdapter()
+            except Exception:
+                pass
+
+        # Try Groq
+        if os.environ.get("GROQ_API_KEY"):
+            try:
+                from attractor.llm.adapters.groq import GroqAdapter
+                providers["groq"] = GroqAdapter()
             except Exception:
                 pass
 
@@ -97,8 +106,8 @@ class Client:
         if not providers:
             raise ConfigurationError(
                 "No LLM provider API keys found in environment. "
-                "Set OPENROUTER_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY, "
-                "or GEMINI_API_KEY.  You can place them in a .env file at "
+                "Set OPENROUTER_API_KEY, OPENAI_API_KEY, GROQ_API_KEY, "
+                "ANTHROPIC_API_KEY, or GEMINI_API_KEY. You can place them in a .env file at "
                 "the project root."
             )
 

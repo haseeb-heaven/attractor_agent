@@ -6,6 +6,31 @@ from pathlib import Path
 
 
 def main() -> None:
+    cli_flags = {
+        "--request",
+        "--config",
+        "--language",
+        "--framework",
+        "--include-tests",
+        "--no-include-tests",
+        "--include-sdlc",
+        "--no-include-sdlc",
+        "--use-mock",
+        "--auto-approve",
+        "--no-auto-approve",
+        "--require-human-review",
+        "--retry-save-attempts",
+        "--project-name",
+        "--project-dir",
+        "--interactive",
+    }
+
+    argv = sys.argv[1:]
+    if any(arg in cli_flags for arg in argv):
+        from attractor_agent.cli import main as cli_main
+
+        raise SystemExit(cli_main(argv))
+
     parser = argparse.ArgumentParser(description="Attractor Agent")
     parser.add_argument("dot_file", nargs="?", help="Optional DOT file to execute directly")
     parser.add_argument("--gui", action="store_true", help="Launch the Gradio GUI")

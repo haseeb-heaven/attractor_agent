@@ -19,6 +19,7 @@ pip install -e .[dev]
 ```
 
 Set your LLM credentials in `.env` when you are not using the mock server.
+Supported providers: OpenRouter (`OPENROUTER_API_KEY`), OpenAI (`OPENAI_API_KEY`), Groq (`GROQ_API_KEY`), Anthropic (`ANTHROPIC_API_KEY`), Gemini (`GEMINI_API_KEY` or `GOOGLE_API_KEY`).
 
 ## CLI
 
