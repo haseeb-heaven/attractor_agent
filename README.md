@@ -13,6 +13,7 @@
 - **🔍 Human-in-the-Loop**: Preview generated code and approve, fix, or retry at any stage.
 - **🧪 Robust Testing**: Integrated support for automated unit test generation and verification.
 - **🛡️ SDLC Validation**: Built-in review gates for error handling, security, and documentation.
+- **🎭 LLMock Integration**: Support for [LLMock](https://llmock.copilotkit.dev/) to run deterministic, cost-free tests locally.
 
 ---
 
@@ -77,6 +78,7 @@ Attractor uses a state-of-the-art graph-based execution model:
 4. **Test Gate**: Validates that tests pass before moving forward.
 5. **Human Review**: You inspect the code in the GUI/CLI.
 6. **SDLC Validation**: Final polish for security and robust error handling.
+7. **Mock Testing**: (Optional) Use LLMock to simulate model responses without API costs.
 
 ---
 

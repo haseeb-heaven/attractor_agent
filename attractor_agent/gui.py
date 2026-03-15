@@ -2,6 +2,10 @@ import os
 import re
 import threading
 import time
+import subprocess
+import socket
+import atexit
+import logging
 from pathlib import Path
 
 import gradio as gr
@@ -10,6 +14,8 @@ from attractor.pipeline.events import EventEmitter, PipelineEventKind, PipelineE
 from attractor.pipeline.interviewer import Interviewer, Question, Answer
 from attractor.pipeline.backend import LLMBackend
 from attractor_agent.cli import build_dot
+
+logger = logging.getLogger("attractor_agent.gui")
 
 
 class GradioInterviewer(Interviewer):
@@ -32,6 +38,25 @@ class GradioInterviewer(Interviewer):
     def set_answer(self, label: str):
         self.selected_label = label
         self.answer_event.set()
+
+
+# ── Port Waiter ───────────────────────────────────────────────────────────────
+def wait_for_port(host: str, port: int, timeout: float = 45.0) -> bool:
+    """
+    Poll until a TCP port accepts connections or timeout expires.
+    """
+    logger.info(f"Waiting for server at {host}:{port} (timeout={timeout}s)")
+    start = time.time()
+    while time.time() - start < timeout:
+        try:
+            with socket.create_connection((host, port), timeout=1.0):
+                logger.info(f"✓ Server ready at {host}:{port}")
+                return True
+        except (ConnectionRefusedError, OSError):
+            time.sleep(0.5)
+    raise RuntimeError(
+        f"Server at {host}:{port} did not respond within {timeout}s"
+    )
 
 
 def slugify(text: str) -> str:
@@ -84,7 +109,7 @@ def get_gradio_language(language: str) -> str:
 active_interviewer: GradioInterviewer | None = None
 
 
-def start_pipeline(request: str, language: str, framework: str, include_tests: bool, include_sdlc: bool):
+def start_pipeline(request: str, language: str, framework: str, include_tests: bool, include_sdlc: bool, use_mock: bool = False):
     """Main pipeline generator — streams logs + code to Gradio UI."""
     global active_interviewer
 
@@ -104,10 +129,39 @@ def start_pipeline(request: str, language: str, framework: str, include_tests: b
     dot_file = project_dir / "pipeline.dot"
     dot_file.write_text(dot_content, encoding="utf-8")
 
-    yield f"🚀 Pipeline started: {request}\nSaved: {dot_file}\n", "", gr.update(visible=False), gr.update(visible=False)
+    logs = [f"🚀 Pipeline started: {request}\n"]
 
-    # Setup engine
-    backend = LLMBackend()
+    if use_mock:
+        yield f"🚀 Pipeline started: {request}\nSaved: {dot_file}\n🚀 Starting Mock LLM server on port 5555...\n", "", gr.update(visible=False), gr.update(visible=False)
+        
+        # Start llmock as a subprocess using shell=True string for Windows compatibility
+        mock_process = subprocess.Popen(
+            "npx -y @copilotkit/llmock --port 5555",
+            shell=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+        # Ensure it cleans up on exit
+        atexit.register(lambda: mock_process.terminate())
+        
+        try:
+            # Wait until the port is actually accepting connections
+            wait_for_port("localhost", 5555, timeout=45)
+            logs.append("✓ Mock LLM server is ready.")
+        except RuntimeError as e:
+            logs.append(f"❌ Mock server startup failed: {e}")
+            yield "\n".join(logs), "", gr.update(visible=False), gr.update(visible=False)
+            return
+        
+        from attractor.llm.client import Client
+        from attractor.llm.adapters.openai import OpenAIAdapter
+        mock_adapter = OpenAIAdapter(api_key="mock-key", base_url="http://localhost:5555/v1")
+        client = Client(providers={"mock": mock_adapter}, default_provider="mock")
+        backend = LLMBackend(client=client)
+    else:
+        backend = LLMBackend()
+        yield f"🚀 Pipeline started: {request}\nSaved: {dot_file}\n", "", gr.update(visible=False), gr.update(visible=False)
+
     interviewer = GradioInterviewer()
     active_interviewer = interviewer
 
@@ -119,7 +173,6 @@ def start_pipeline(request: str, language: str, framework: str, include_tests: b
     )
 
     emitter = EventEmitter()
-    logs = [f"🚀 Pipeline started: {request}\n"]
 
     @emitter.on
     def on_event(event: PipelineEvent):
@@ -264,6 +317,7 @@ def run_gui():
                     with gr.Row():
                         tests_input = gr.Checkbox(value=True, label="Include Unit Tests")
                         sdlc_input = gr.Checkbox(value=True, label="Include SDLC Review")
+                        mock_input = gr.Checkbox(value=False, label="Use Mock LLM (localhost:5555)")
 
                     start_btn = gr.Button("🚀 Build Project", variant="primary", size="lg")
 
@@ -288,7 +342,7 @@ def run_gui():
 
             start_btn.click(
                 start_pipeline,
-                inputs=[request_input, lang_input, framework_input, tests_input, sdlc_input],
+                inputs=[request_input, lang_input, framework_input, tests_input, sdlc_input, mock_input],
                 outputs=[log_box, code_box, btn_approve, btn_retry]
             )
             

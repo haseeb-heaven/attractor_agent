@@ -1,0 +1,24 @@
+{
+  "request": {
+    "messages": [
+      { "role": "user", "content": "*" }
+    ]
+  },
+  "response": {
+    "id": "mock-001",
+    "object": "chat.completion",
+    "created": 1710000000,
+    "model": "mock",
+    "choices": [
+      {
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": "# Architecture Plan\n\n## Files\n- Main.java\n- Database.java\n- GamePanel.java\n- HighScore.java\n- SoundManager.java\n\n## Dependencies\n- SQLite JDBC\n- javax.sound.sampled\n\n## Schema\nCREATE TABLE scores (id INTEGER PRIMARY KEY, username TEXT, score INTEGER, date TEXT);"
+        },
+        "finish_reason": "stop"
+      }
+    ],
+    "usage": { "prompt_tokens": 10, "completion_tokens": 50, "total_tokens": 60 }
+  }
+}
