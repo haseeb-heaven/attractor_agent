@@ -103,8 +103,8 @@ def select_next_edge(
         # Return first unconditional
         return unconditional[0]
 
-    # Step 5: Weight-based fallback
-    edges_sorted = sorted(edges, key=lambda e: e.weight, reverse=True)
+    # Step 5: Weight-based fallback (highest weight first)
+    edges_sorted = sorted(edges, key=lambda e: getattr(e, 'weight', 0), reverse=True)
     return edges_sorted[0] if edges_sorted else None
 
 

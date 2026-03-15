@@ -4,5 +4,9 @@ anthropic>=0.30
 google-generativeai>=0.7
 aiohttp>=3.9
 python-dotenv>=1.0
-rich
-gradio
+rich>=13.0.0
+gradio>=4.0.0
+fastapi>=0.100.0
+uvicorn>=0.20.0
+pymongo>=4.6.0
+pytest>=7.0.0
