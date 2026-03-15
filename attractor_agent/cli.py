@@ -8,6 +8,7 @@ import subprocess
 import time
 import atexit
 from pathlib import Path
+from dataclasses import dataclass
 
 from rich.console import Console
 from rich.prompt import Prompt
@@ -34,6 +35,16 @@ logging.basicConfig(
 logger = logging.getLogger("attractor_agent.cli")
 
 console = Console()
+
+
+@dataclass
+class ExtractedBlock:
+    """Structured extracted code block."""
+    language: str
+    code: str
+    filename_comment: str | None = None
+    header_filename: str | None = None
+    attribute_filename: str | None = None
 
 
 # ── Port Waiter ───────────────────────────────────────────────────────────────
@@ -102,6 +113,8 @@ def get_file_extension_from_tag(lang_tag: str, fallback_language: str) -> str:
         "java":       ".java",
         "cpp":        ".cpp",
         "c++":        ".cpp",
+        "csharp":     ".cs",
+        "c#":         ".cs",
         "bash":       ".sh",
         "shell":      ".sh",
         "json":       ".json",
@@ -140,6 +153,188 @@ def get_smart_filename(lang_tag: str, index: int, language: str) -> str:
     if index < len(names):
         return names[index]
     return f"file_{index + 1}{ext}"
+
+
+def _extract_filename_comment(text: str) -> str | None:
+    patterns = [
+        r"^\s*//\s*filename\s*:\s*(.+?)\s*$",
+        r"^\s*#\s*filename\s*:\s*(.+?)\s*$",
+        r"^\s*/\*\s*filename\s*:\s*(.+?)\s*\*/\s*$",
+        r"^\s*<!--\s*filename\s*:\s*(.+?)\s*-->\s*$",
+        r"^\s*filename\s*:\s*(.+?)\s*$",
+    ]
+    for line in text.splitlines()[:5]:
+        for pattern in patterns:
+            m = re.match(pattern, line, re.IGNORECASE)
+            if m:
+                return m.group(1).strip()
+    return None
+
+
+def _strip_filename_markers(text: str) -> str:
+    out: list[str] = []
+    for line in text.splitlines():
+        if _extract_filename_comment(line):
+            continue
+        out.append(line)
+    return "\n".join(out).strip()
+
+
+def _parse_info_attributes(info: str) -> tuple[str, str | None]:
+    info = info.strip()
+    if not info:
+        return "", None
+    parts = info.split()
+    lang = parts[0]
+    attr_filename = None
+    for pattern in [r"(?:file|filename|name)\s*=\s*\"([^\"]+)\"", r"(?:file|filename|name)\s*=\s*'([^']+)'", r"(?:file|filename|name)\s*=\s*([^\s]+)"]:
+        m = re.search(pattern, info, re.IGNORECASE)
+        if m:
+            attr_filename = m.group(1).strip()
+            break
+    return lang, attr_filename
+
+
+def _extract_markdown_blocks(text: str) -> list[ExtractedBlock]:
+    blocks: list[ExtractedBlock] = []
+    for info, code in re.findall(r"```([^\n]*)\n(.*?)```", text, re.DOTALL):
+        cleaned = code.strip()
+        if not cleaned:
+            continue
+        lang, attr_filename = _parse_info_attributes(info)
+        filename_comment = _extract_filename_comment(cleaned)
+        blocks.append(
+            ExtractedBlock(
+                language=lang.lower().strip(),
+                code=_strip_filename_markers(cleaned),
+                filename_comment=filename_comment,
+                attribute_filename=attr_filename,
+            )
+        )
+    return blocks
+
+
+def _extract_fallback_marker_blocks(text: str) -> list[ExtractedBlock]:
+    start_re = re.compile(
+        r"^\s*(?:\[|<)?\s*(?:start|begin)?\s*(?:code|file|block|snippet)\b(.*?)(?:\]|>)?\s*$",
+        re.IGNORECASE,
+    )
+    end_re = re.compile(
+        r"^\s*(?:\[|<)?\s*(?:end|stop|close)\s*(?:code|file|block|snippet)?\b.*(?:\]|>)?\s*$",
+        re.IGNORECASE,
+    )
+
+    blocks: list[ExtractedBlock] = []
+    current_lines: list[str] = []
+    current_lang = ""
+    current_attr_filename: str | None = None
+    inside_block = False
+
+    def flush() -> None:
+        if not current_lines:
+            return
+        code = "\n".join(current_lines).strip()
+        if not code:
+            return
+        blocks.append(
+            ExtractedBlock(
+                language=current_lang,
+                code=_strip_filename_markers(code),
+                filename_comment=_extract_filename_comment(code),
+                attribute_filename=current_attr_filename,
+            )
+        )
+
+    for line in text.splitlines():
+        start_match = start_re.match(line)
+        if start_match:
+            if inside_block:
+                flush()
+            current_lines = []
+            inside_block = True
+            attr = start_match.group(1).strip()
+            current_lang, current_attr_filename = _parse_info_attributes(attr)
+            continue
+        if inside_block and end_re.match(line):
+            flush()
+            current_lines = []
+            current_lang = ""
+            current_attr_filename = None
+            inside_block = False
+            continue
+        if inside_block:
+            current_lines.append(line)
+
+    if inside_block:
+        flush()
+    return [b for b in blocks if b.code]
+
+
+def _extract_header_sections(text: str) -> list[ExtractedBlock]:
+    header_re = re.compile(
+        r"^\s*(?:===\s*(.+?)\s*===|---\s*(.+?)\s*---|###\s+(.+?)\s*|FILE\s*:\s*(.+?)\s*)$",
+        re.IGNORECASE,
+    )
+    blocks: list[ExtractedBlock] = []
+    current_filename: str | None = None
+    current_lines: list[str] = []
+
+    for line in text.splitlines():
+        m = header_re.match(line)
+        if m:
+            if current_filename and current_lines:
+                code = "\n".join(current_lines).strip()
+                if code:
+                    blocks.append(ExtractedBlock(language="", code=code, header_filename=current_filename))
+            current_filename = next((g.strip() for g in m.groups() if g), None)
+            current_lines = []
+            continue
+        if current_filename:
+            current_lines.append(line)
+
+    if current_filename and current_lines:
+        code = "\n".join(current_lines).strip()
+        if code:
+            blocks.append(ExtractedBlock(language="", code=code, header_filename=current_filename))
+    return blocks
+
+
+def _extract_filename_comment_sections(text: str) -> list[ExtractedBlock]:
+    blocks: list[ExtractedBlock] = []
+    current_filename: str | None = None
+    current_lines: list[str] = []
+    for line in text.splitlines():
+        marker = _extract_filename_comment(line)
+        if marker:
+            if current_filename and current_lines:
+                blocks.append(
+                    ExtractedBlock(language="", code="\n".join(current_lines).strip(), filename_comment=current_filename)
+                )
+            current_filename = marker
+            current_lines = []
+            continue
+        if current_filename:
+            current_lines.append(line)
+
+    if current_filename and current_lines:
+        blocks.append(ExtractedBlock(language="", code="\n".join(current_lines).strip(), filename_comment=current_filename))
+    return [b for b in blocks if b.code]
+
+
+def extract_blocks_with_fallbacks(text: str) -> list[ExtractedBlock]:
+    markdown_blocks = _extract_markdown_blocks(text)
+    if markdown_blocks:
+        return markdown_blocks
+
+    marker_blocks = _extract_fallback_marker_blocks(text)
+    if marker_blocks:
+        return marker_blocks
+
+    header_blocks = _extract_header_sections(text)
+    if header_blocks:
+        return header_blocks
+
+    return _extract_filename_comment_sections(text)
 
 
 def print_project_tree(project_dir: Path) -> None:
@@ -257,20 +452,76 @@ def build_dot(request: str, language: str, framework: str,
 
 
 # ── File Saver ────────────────────────────────────────────────────────────────
+def _infer_language_from_filename(filename: str) -> str:
+    suffix = Path(filename).suffix.lower()
+    mapping = {
+        ".py": "python",
+        ".js": "javascript",
+        ".ts": "typescript",
+        ".html": "html",
+        ".css": "css",
+        ".sql": "sql",
+        ".json": "json",
+        ".yml": "yaml",
+        ".yaml": "yaml",
+        ".sh": "bash",
+        ".go": "go",
+        ".rs": "rust",
+        ".java": "java",
+        ".cpp": "cpp",
+        ".cs": "csharp",
+    }
+    return mapping.get(suffix, "")
+
+
+def _default_filename_for_language(lang: str, index: int) -> str:
+    base_map = {
+        "java": "Main.java",
+        "csharp": "Program.cs",
+        "c#": "Program.cs",
+        "go": "main.go",
+        "cpp": "main.cpp",
+        "c++": "main.cpp",
+        "rust": "main.rs",
+        "python": "main.py",
+        "javascript": "app.js",
+        "js": "app.js",
+        "typescript": "main.ts",
+        "ts": "main.ts",
+        "html": "index.html",
+        "css": "styles.css",
+        "sql": "schema.sql",
+    }
+    fallback = base_map.get(lang.lower().strip())
+    if fallback and index == 0:
+        return fallback
+    if fallback:
+        stem = Path(fallback).stem
+        suffix = Path(fallback).suffix
+        return f"{stem}_{index + 1}{suffix}"
+    ext = get_file_extension_from_tag(lang, "python")
+    return f"file_{index + 1}{ext}"
+
+
+def _resolve_filename(block: ExtractedBlock, index: int, language: str) -> str:
+    if block.filename_comment:
+        return block.filename_comment
+    if block.header_filename:
+        return block.header_filename
+    if block.attribute_filename:
+        return block.attribute_filename
+
+    detected_lang = block.language or _infer_language_from_filename(block.filename_comment or "") or language
+    return _default_filename_for_language(detected_lang, index)
+
+
 def save_output_files(
     result,
     project_dir: Path,
     language: str,
     app_file_name: str
 ) -> list[Path]:
-    """
-    Parse ALL triple-backtick code blocks from Generate output.
-    Saves each block as a separate named file.
-    Extracts filename from inline comment: // filename: <name> OR # filename: <name>
-    Falls back to smart naming by type + index counter.
-    Also saves tests and auto-generates README.md.
-    """
-    # ── Try all possible context key names ───────────────────────────────────
+    """Extract generated files with multi-stage fallback parsing and save them."""
     generate_output = (
         result.context.get_string("Generate.output", "")
         or result.context.get_string("generate_output", "")
@@ -282,7 +533,6 @@ def save_output_files(
         or result.context.get_string("tests_output", "")
     )
 
-    # ── DEBUG: dump every context key to log file ─────────────────────────────
     logger.debug("=== ALL CONTEXT KEYS ===")
     try:
         for key in result.context.keys():
@@ -300,87 +550,48 @@ def save_output_files(
         )
         return []
 
-    # ── Parse ALL code blocks ─────────────────────────────────────────────────
-    code_blocks = re.findall(
-        r"```([a-zA-Z0-9+\-#]*)\s*(.*?)```",
-        generate_output,
-        re.DOTALL
-    )
-    logger.info(f"Found {len(code_blocks)} code block(s) in Generate output")
+    extracted_blocks = extract_blocks_with_fallbacks(generate_output)
+    logger.info(f"Found {len(extracted_blocks)} extracted block(s) in Generate output")
 
-    ext_counters: dict[str, int] = {}
+    if not extracted_blocks:
+        logger.error("No structured blocks detected in generated output.")
+        logger.error("Raw output preview: %r", generate_output[:800])
+        return []
+
     saved_files: list[Path] = []
+    extracted_manifest: list[dict[str, str]] = []
 
-    if code_blocks:
-        for lang_tag, code in code_blocks:
-            code = code.strip()
-            if not code:
-                continue
+    for idx, block in enumerate(extracted_blocks):
+        code = block.code.strip()
+        if not code:
+            continue
 
-            ext = get_file_extension_from_tag(lang_tag, language)
+        filename = _resolve_filename(block, idx, language)
+        fpath = project_dir / filename
 
-            # ── Extract filename from first 3 lines of block ──────────────────
-            filename: str | None = None
-            lines = code.splitlines()
-            for line in lines[:3]:
-                m = re.match(
-                    r'^(?://|#|/\*)\s*filename:\s*(.+?)(?:\s*\*/)?$',
-                    line.strip(),
-                    re.IGNORECASE
-                )
-                if m:
-                    filename = m.group(1).strip()
-                    # Strip the filename comment from saved code
-                    code = "\n".join(
-                        line_content for line_content in lines
-                        if not re.match(
-                            r'^(?://|#|/\*)\s*filename:',
-                            line_content.strip(),
-                            re.IGNORECASE
-                        )
-                    ).strip()
-                    break
+        try:
+            os.makedirs(fpath.parent, exist_ok=True)
+            fpath.write_text(code, encoding="utf-8")
+            saved_files.append(fpath)
+            extracted_manifest.append({
+                "filename": filename,
+                "language": block.language or _infer_language_from_filename(filename) or language.lower(),
+                "content": code,
+            })
+            logger.info(f"Saved: {fpath} ({len(code):,} chars)")
+            console.print(
+                f"  [green]✓[/green] Saved [bold]{filename}[/bold] "
+                f"[dim]({len(code):,} chars)[/dim]"
+            )
+        except OSError as e:
+            logger.error(f"Failed to save {fpath}: {e}")
+            console.print(f"  [red]✗[/red] Could not save {filename}: {e}")
 
-            # ── Fallback to smart naming ──────────────────────────────────────
-            if not filename:
-                count = ext_counters.get(ext, 0)
-                filename = get_smart_filename(lang_tag, count, language)
-                ext_counters[ext] = count + 1
+    result.context.set("Generate.extracted_files", extracted_manifest)
 
-            fpath = project_dir / filename
-            try:
-                os.makedirs(fpath.parent, exist_ok=True)
-                fpath.write_text(code, encoding="utf-8")
-                saved_files.append(fpath)
-                logger.info(f"Saved: {fpath} ({len(code):,} chars)")
-                console.print(
-                    f"  [green]✓[/green] Saved [bold]{filename}[/bold] "
-                    f"[dim]({len(code):,} chars)[/dim]"
-                )
-            except OSError as e:
-                logger.error(f"Failed to save {fpath}: {e}")
-                console.print(f"  [red]✗[/red] Could not save {filename}: {e}")
-
-    else:
-        # ── No code blocks found — save raw output as fallback ────────────────
-        logger.warning("No triple-backtick code blocks found — saving raw output")
-        raw_file = project_dir / app_file_name
-        raw_file.write_text(generate_output, encoding="utf-8")
-        console.print(
-            f"[yellow]⚠ No code blocks found — saved raw output to "
-            f"[bold]{raw_file.name}[/bold][/yellow]"
-        )
-        saved_files.append(raw_file)
-
-    # ── Save test file ────────────────────────────────────────────────────────
     if tests_output:
-        test_blocks = re.findall(
-            r"```[a-zA-Z0-9+\-#]*\s*(.*?)```",
-            tests_output,
-            re.DOTALL
-        )
-        # FIX: test_blocks is a list — use  not .strip() directly
-        test_code = test_blocks[0].strip() if test_blocks else tests_output.strip()
+        test_blocks = _extract_markdown_blocks(tests_output)
+        test_code = test_blocks[0].code.strip() if test_blocks else tests_output.strip()
         test_ext = get_extension(language)
         test_file = project_dir / f"test_main{test_ext}"
         try:
@@ -394,7 +605,6 @@ def save_output_files(
         except OSError as e:
             logger.error(f"Failed to save tests: {e}")
 
-    # ── Auto-generate README.md ───────────────────────────────────────────────
     run_instructions = {
         "python":     "```bash\npip install -r requirements.txt\npython main.py\n```",
         "javascript": "```bash\nnpm install\nnode main.js\n```",
@@ -649,6 +859,17 @@ def run_cli() -> None:
 
         console.print("[bold]Saving generated files...[/bold]")
         saved = save_output_files(result, project_dir, language, app_file_name)
+
+        if not saved:
+            logger.warning("No files extracted from Generate output. Retrying pipeline once.")
+            retry_result = run_pipeline(dot_content, config=config, emitter=emitter)
+            saved = save_output_files(retry_result, project_dir, language, app_file_name)
+            if not saved:
+                logger.error(
+                    "No code blocks detected after retry. Raw preview: %r",
+                    retry_result.context.get_string("Generate.output", "")[:800],
+                )
+                console.print("[bold red]❌ No code blocks were detected after one retry. Stopping.[/bold red]")
 
         if saved:
             console.print(
