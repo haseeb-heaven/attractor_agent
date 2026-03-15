@@ -1,0 +1,30 @@
+digraph FullSDLC {
+    label="Autonomous SDLC Pipeline";
+    
+    // Nodes
+    Start [shape=Mdiamond];
+    Plan [shape=box, prompt="Create a plan for a simple Python library that calculates Fibonacci numbers."];
+    Generate [shape=box, prompt="Generate Python code based on the plan: ${Plan.output}"];
+    Tests [shape=box, prompt="Generate unit tests for the code: ${Generate.output}"];
+    RunTests [type=test_runner];
+    Diagnose [type=bug_diagnosis];
+    Fix [type=targeted_fix, prompt="Fix the code in ${Generate.output} based on diagnosis: ${Diagnose.diagnosis}"];
+    Score [type=satisfaction_scorer, prompt="Rate the fixed code quality from 0-100"];
+    Converge [type=convergence];
+    Exit [shape=Msquare];
+
+    // Edges
+    Start -> Plan;
+    Plan -> Generate;
+    Generate -> Tests;
+    Tests -> RunTests;
+    
+    // Convergence logic
+    RunTests -> Converge [weight=10];
+    Converge -> Exit [label="converged"];
+    Converge -> Diagnose [label="loop"];
+    
+    Diagnose -> Fix;
+    Fix -> Score;
+    Score -> RunTests;
+}

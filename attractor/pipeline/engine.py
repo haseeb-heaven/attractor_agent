@@ -69,9 +69,13 @@ def select_next_edge(
         # Sort by weight descending, then to_node ascending
         return sorted(candidates, key=lambda e: (-e.weight, e.to_node))[0]
 
-    # Step 1: Suggested next IDs
-    if outcome.suggested_next_ids:
-        matches = [e for e in edges if e.to_node in outcome.suggested_next_ids]
+    # Step 1: Expression conditions (User requested: conditions FIRST)
+    conditional = [e for e in edges if e.condition]
+    if conditional:
+        matches = []
+        for edge in conditional:
+            if evaluate_condition(edge.condition, outcome, context):
+                matches.append(edge)
         if matches:
             return best_of(matches)
 
@@ -81,13 +85,9 @@ def select_next_edge(
         if matches:
             return best_of(matches)
 
-    # Step 3: Expression conditions
-    conditional = [e for e in edges if e.condition]
-    if conditional:
-        matches = []
-        for edge in conditional:
-            if evaluate_condition(edge.condition, outcome, context):
-                matches.append(edge)
+    # Step 3: Suggested next IDs
+    if outcome.suggested_next_ids:
+        matches = [e for e in edges if e.to_node in outcome.suggested_next_ids]
         if matches:
             return best_of(matches)
 

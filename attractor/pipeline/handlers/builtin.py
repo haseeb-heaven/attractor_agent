@@ -316,6 +316,93 @@ class ManagerLoopHandler(Handler):
         return Outcome(status=StageStatus.SUCCESS)
 
 
+class BugDiagnosisHandler(Handler):
+    """Parses test failures to provide a diagnosis for the fixer."""
+
+    def execute(self, node: Node, context: Context, graph: Graph,
+                emitter: EventEmitter, **kwargs: Any) -> Outcome:
+        # Search for test output
+        test_stdout = context.get_string("RunTests.stdout", "") or context.get_string("test_runner.stdout", "")
+        
+        if not test_stdout:
+            return Outcome(
+                status=StageStatus.SUCCESS,
+                context_updates={f"{node.id}.diagnosis": "No test output found to diagnose."}
+            )
+
+        # Basic "diagnosis" — extract everything after 'FAILURES' or 'FAIL'
+        diagnosis = ""
+        if "FAILURES" in test_stdout:
+            diagnosis = test_stdout.split("FAILURES")[-1]
+        elif "FAIL:" in test_stdout:
+            diagnosis = test_stdout.split("FAIL:")[-1]
+        else:
+            # Maybe just a traceback?
+            lines = test_stdout.splitlines()
+            traceback = [line for line in lines if "Traceback" in line or "Error:" in line]
+            diagnosis = "\n".join(traceback) or test_stdout[-500:]
+
+        context.set(f"{node.id}.diagnosis", diagnosis)
+        emitter.emit_simple(PipelineEventKind.LOG, node_id=node.id, message=f"Diagnosed bug: {diagnosis[:100]}...")
+        
+        return Outcome(
+            status=StageStatus.SUCCESS,
+            context_updates={f"{node.id}.diagnosis": diagnosis}
+        )
+
+
+class TargetedFixHandler(CodergenHandler):
+    """LLM handler specifically tasked with fixing a diagnosed bug."""
+
+    def execute(self, node: Node, context: Context, graph: Graph,
+                emitter: EventEmitter, **kwargs: Any) -> Outcome:
+        # Get diagnosis from context
+        diagnosis = context.get_string("Diagnose.diagnosis", "") or context.get_string("bug_diagnosis.diagnosis", "")
+        original_code = context.get_string("Generate.output", "")
+        
+        # Override prompt to include diagnosis
+        node.prompt = (
+            f"Original Code:\n{original_code}\n\n"
+            f"Bug Diagnosis:\n{diagnosis}\n\n"
+            f"Task: {node.prompt or 'Fix the bug identified above.'}"
+        )
+        
+        # Use Codergen logic
+        return super().execute(node, context, graph, emitter, **kwargs)
+
+
+class ConvergenceHandler(Handler):
+    """Decision point to exit SDLC loop based on quality metrics."""
+
+    def execute(self, node: Node, context: Context, graph: Graph,
+                emitter: EventEmitter, **kwargs: Any) -> Outcome:
+        # Check test success and score
+        test_rc = context.get("RunTests.returncode", 1)
+        score = context.get("Score.satisfaction_score", 0)
+        
+        # User requirement: tests==0 (returncode 0) + score >= 95
+        converged = (test_rc == 0 and score >= 95)
+        
+        emitter.emit_simple(
+            PipelineEventKind.LOG,
+            node_id=node.id,
+            message=f"Convergence check: test_rc={test_rc}, score={score} -> converged={converged}"
+        )
+        
+        if converged:
+            return Outcome(
+                status=StageStatus.SUCCESS,
+                preferred_label="converged",
+                suggested_next_ids=["Exit", "exit", "End", "end"]
+            )
+        else:
+            return Outcome(
+                status=StageStatus.SUCCESS,
+                preferred_label="loop",
+                suggested_next_ids=["Diagnose", "bug_diagnosis"]
+            )
+
+
 def create_default_registry() -> HandlerRegistry:
     """Create a HandlerRegistry with all built-in handlers registered."""
 
@@ -334,6 +421,9 @@ def create_default_registry() -> HandlerRegistry:
     registry.register("test_runner", TestExecutionHandler())
     registry.register("digital_twin", DigitalTwinHandler())
     registry.register("satisfaction_scorer", SatisfactionScorerHandler())
+    registry.register("bug_diagnosis", BugDiagnosisHandler())
+    registry.register("targeted_fix", TargetedFixHandler())
+    registry.register("convergence", ConvergenceHandler())
 
     # Default handler for unknown types — use codergen
     registry.set_default(CodergenHandler())
