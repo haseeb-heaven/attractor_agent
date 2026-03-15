@@ -99,22 +99,18 @@ class CodergenHandler(Handler):
 
         try:
             result = backend.generate(prompt, node=node, context=context)
-            
-            # Extract code blocks (Section 5.3)
-            # Find all ```...``` blocks
-            code_blocks = re.findall(r"```(?:[a-zA-Z0-9+\-#]*)\s*(.*?)```", result, re.DOTALL)
-            if code_blocks:
-                # Use the first block as the primary output for downstream handlers
-                # but keep the full result in .raw_output
-                context.set(f"{node.id}.raw_output", result)
-                result = code_blocks[0].strip()
 
+            # Preserve full model output for downstream multi-file extraction.
+            context.set(f"{node.id}.raw_output", result)
             context.set(f"{node.id}.output", result)
             context.set(f"{node.id}.status", "completed")
             context.set(f"{node.id}.outcome", "SUCCESS")
             return Outcome(
                 status=StageStatus.SUCCESS,
-                context_updates={f"{node.id}.output": result},
+                context_updates={
+                    f"{node.id}.output": result,
+                    f"{node.id}.raw_output": result,
+                },
             )
         except Exception as e:
             context.set(f"{node.id}.status", "failed")

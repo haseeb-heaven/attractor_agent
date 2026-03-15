@@ -50,3 +50,30 @@ def test_default_filename_language_map():
     assert _default_filename_for_language("html", 0) == "index.html"
     assert _default_filename_for_language("css", 0) == "styles.css"
     assert _default_filename_for_language("javascript", 1) == "app_2.js"
+
+
+def test_strip_only_leading_filename_marker_not_internal_comment():
+    text = """```javascript
+// filename: app.js
+console.log('start')
+// filename: this_is_runtime_text.js
+console.log('end')
+```"""
+    blocks = extract_blocks_with_fallbacks(text)
+    assert len(blocks) == 1
+    assert "this_is_runtime_text.js" in blocks[0].code
+
+
+def test_html_script_filename_comment_does_not_split_js_file():
+    text = """<!doctype html>
+<html>
+<body>
+<script>
+// filename: app.js
+console.log('inline');
+</script>
+</body>
+</html>
+"""
+    blocks = extract_blocks_with_fallbacks(text)
+    assert blocks == []

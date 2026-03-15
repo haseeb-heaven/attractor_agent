@@ -172,12 +172,11 @@ def _extract_filename_comment(text: str) -> str | None:
 
 
 def _strip_filename_markers(text: str) -> str:
-    out: list[str] = []
-    for line in text.splitlines():
-        if _extract_filename_comment(line):
-            continue
-        out.append(line)
-    return "\n".join(out).strip()
+    lines = text.splitlines()
+    start = 0
+    while start < min(len(lines), 5) and _extract_filename_comment(lines[start]):
+        start += 1
+    return "\n".join(lines[start:]).strip()
 
 
 def _parse_info_attributes(info: str) -> tuple[str, str | None]:
@@ -303,8 +302,17 @@ def _extract_filename_comment_sections(text: str) -> list[ExtractedBlock]:
     blocks: list[ExtractedBlock] = []
     current_filename: str | None = None
     current_lines: list[str] = []
+    html_mode = False
+    script_depth = 0
+
     for line in text.splitlines():
-        marker = _extract_filename_comment(line)
+        lower = line.lower()
+        if "<html" in lower or "<!doctype html" in lower:
+            html_mode = True
+        if html_mode and "<script" in lower:
+            script_depth += 1
+
+        marker = None if (html_mode and script_depth > 0) else _extract_filename_comment(line)
         if marker:
             if current_filename and current_lines:
                 blocks.append(
@@ -313,8 +321,12 @@ def _extract_filename_comment_sections(text: str) -> list[ExtractedBlock]:
             current_filename = marker
             current_lines = []
             continue
+
         if current_filename:
             current_lines.append(line)
+
+        if html_mode and "</script>" in lower and script_depth > 0:
+            script_depth -= 1
 
     if current_filename and current_lines:
         blocks.append(ExtractedBlock(language="", code="\n".join(current_lines).strip(), filename_comment=current_filename))
