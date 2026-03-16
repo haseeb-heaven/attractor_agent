@@ -81,9 +81,9 @@ class DBInterviewer(Interviewer):
             [{"label": option.label, "key": option.key} for option in question.options],
         )
         while True:
-            run = db.get_run(self.run_id)
-            for stored in run.get("questions", []):
-                if stored["question_id"] == question.id and stored["answer"]:
+            questions = db.get_questions(self.run_id)
+            for stored in questions:
+                if stored["question_id"] == question.id and stored.get("answer"):
                     answer_data = json.loads(stored["answer"])
                     return HumanAnswer(
                         question_id=question.id,
@@ -134,9 +134,12 @@ def execute_pipeline_task(run_id: str, spec: BuildRequest) -> None:
 @app.post("/api/v1/runs", response_model=RunResponse)
 async def create_run(request: PipelineRequest, background_tasks: BackgroundTasks):
     run_id = str(uuid.uuid4())
-    payload = request.model_dump()
-    payload["request"] = payload.get("request") or payload.get("prompt")
-    spec = build_request_from_mapping(payload)
+    try:
+        payload = request.model_dump()
+        payload["request"] = payload.get("request") or payload.get("prompt")
+        spec = build_request_from_mapping(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     db.save_run(run_id, goal=spec.request, config=request.model_dump())
     _write_status(run_id, "RUNNING")
     background_tasks.add_task(execute_pipeline_task, run_id, spec)
@@ -235,4 +238,4 @@ async def answer_question(run_id: str, qid: str, answer: dict[str, Any]):
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="127.0.0.1", port=8000)

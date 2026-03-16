@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+import uuid
 from pathlib import Path
 
 import gradio as gr
@@ -41,7 +42,20 @@ class GradioInterviewer(Interviewer):
         self.answer_event.set()
 
 
-active_interviewer: GradioInterviewer | None = None
+session_state: dict[str, GradioInterviewer] = {}
+active_run_id: str | None = None
+
+
+def get_interviewer(run_id: str) -> GradioInterviewer | None:
+    return session_state.get(run_id)
+
+
+def set_interviewer(run_id: str, interviewer: GradioInterviewer) -> None:
+    session_state[run_id] = interviewer
+
+
+def clear_interviewer(run_id: str) -> None:
+    session_state.pop(run_id, None)
 
 
 def load_config_into_form(config_file: str | None):
@@ -114,7 +128,9 @@ def start_pipeline(
     retry_save_attempts: int,
     config_file: str | None,
 ):
-    global active_interviewer
+    global active_run_id
+    run_id = str(uuid.uuid4())
+    active_run_id = run_id
 
     try:
         spec = _resolve_spec(
@@ -142,7 +158,7 @@ def start_pipeline(
     interviewer: Interviewer | None = None
     if spec.require_human_review and not spec.auto_approve:
         interviewer = GradioInterviewer()
-        active_interviewer = interviewer
+        set_interviewer(run_id, interviewer)
 
     emitter = EventEmitter()
     result_container = {}
@@ -170,6 +186,7 @@ def start_pipeline(
     thread.start()
 
     while True:
+        active_interviewer = get_interviewer(run_id)
         if active_interviewer and active_interviewer.question:
             question = active_interviewer.question
             yield (
@@ -188,6 +205,7 @@ def start_pipeline(
             time.sleep(0.5)
 
     if "error" in result_container:
+        clear_interviewer(run_id)
         yield result_container["error"], "", gr.update(visible=False), gr.update(visible=False)
         return
 
@@ -196,22 +214,30 @@ def start_pipeline(
         preview_file = artifacts.saved_files[0]
         code = preview_file.read_text(encoding="utf-8")
         logs.append(f"Saved {len(artifacts.saved_files)} file(s) to {artifacts.project_dir}")
+        clear_interviewer(run_id)
         yield "\n".join(logs), code, gr.update(visible=False), gr.update(visible=False)
         return
 
     error = artifacts.result.error or "No files were extracted from the pipeline output."
+    clear_interviewer(run_id)
     yield "\n".join(logs + [error]), "", gr.update(visible=False), gr.update(visible=False)
 
 
 def approve_action():
-    global active_interviewer
+    global active_run_id
+    if not active_run_id:
+        return gr.update(visible=False), gr.update(visible=False)
+    active_interviewer = get_interviewer(active_run_id)
     if active_interviewer:
         active_interviewer.set_answer("[A]pprove")
     return gr.update(visible=False), gr.update(visible=False)
 
 
 def retry_action():
-    global active_interviewer
+    global active_run_id
+    if not active_run_id:
+        return gr.update(visible=False), gr.update(visible=False)
+    active_interviewer = get_interviewer(active_run_id)
     if active_interviewer:
         active_interviewer.set_answer("[R]etry")
     return gr.update(visible=False), gr.update(visible=False)

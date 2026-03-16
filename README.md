@@ -18,7 +18,7 @@ pip install -r requirements.txt
 pip install -e .[dev]
 ```
 
-LiteLLM dependency is pinned to a recent release (`litellm>=1.82.1`).
+LiteLLM dependency requires version 1.82.1 or newer (`litellm>=1.82.1`).
 Reference docs: https://docs.litellm.ai/docs/
 
 Set your LLM credentials in `.env` when you are not using the mock server.

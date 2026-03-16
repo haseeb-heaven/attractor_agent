@@ -62,7 +62,8 @@ def _parse_info_attributes(info: str) -> tuple[str, str | None]:
 
 def _extract_markdown_blocks(text: str) -> list[ExtractedBlock]:
     blocks: list[ExtractedBlock] = []
-    for info, code in re.findall(r"```([^\n]*)\n(.*?)```", text, re.DOTALL):
+    pattern = re.compile(r"```([^\n]*)\r?\n(.*?)\r?\n```", re.DOTALL)
+    for info, code in pattern.findall(text):
         cleaned = code.strip()
         if not cleaned:
             continue

@@ -100,6 +100,14 @@ def _as_bool(value: Any, default: bool) -> bool:
     return bool(value)
 
 
+def _bool_alias(data: dict[str, Any], primary: str, alias: str, default: bool) -> bool:
+    if primary in data:
+        return _as_bool(data.get(primary), default)
+    if alias in data:
+        return _as_bool(data.get(alias), default)
+    return default
+
+
 def build_request_from_mapping(data: dict[str, Any]) -> BuildRequest:
     request = str(data.get("request") or data.get("prompt") or "").strip()
     if not request:
@@ -111,12 +119,9 @@ def build_request_from_mapping(data: dict[str, Any]) -> BuildRequest:
         framework=str(data.get("framework") or "").strip(),
         include_tests=_as_bool(data.get("include_tests"), True),
         include_sdlc=_as_bool(data.get("include_sdlc"), True),
-        use_mock=_as_bool(data.get("use_mock") or data.get("mock_llm"), False),
+        use_mock=_bool_alias(data, "use_mock", "mock_llm", False),
         auto_approve=_as_bool(data.get("auto_approve"), True),
-        require_human_review=_as_bool(
-            data.get("require_human_review") or data.get("human_review"),
-            False,
-        ),
+        require_human_review=_bool_alias(data, "require_human_review", "human_review", False),
         retry_save_attempts=max(1, int(data.get("retry_save_attempts") or 3)),
         project_name=str(data.get("project_name") or "").strip(),
         checkpoint_dir=str(data.get("checkpoint_dir") or "").strip(),
@@ -186,6 +191,8 @@ def build_dot(spec: BuildRequest, attempt: int = 0) -> str:
         "        goal_gate=true",
         "    ];",
         "",
+        '    Compile [handler="compile_runner", label="Compile (if needed)", max_retries=2];',
+        "",
     ]
 
     if spec.include_tests:
@@ -237,13 +244,19 @@ def build_dot(spec: BuildRequest, attempt: int = 0) -> str:
     if spec.include_tests:
         sections.extend(
             [
-                "    Generate -> Tests -> RunTests;",
+                "    Generate -> Compile -> Tests -> RunTests;",
+                '    Compile -> Generate [label="retry_compile", condition="outcome=fail"];',
                 '    RunTests -> Score [label="pass", condition="outcome=success"];',
                 '    RunTests -> Generate [label="retry_code", condition="outcome=fail"];',
             ]
         )
     else:
-        sections.append("    Generate -> Score;")
+        sections.extend(
+            [
+                "    Generate -> Compile -> Score;",
+                '    Compile -> Generate [label="retry_compile", condition="outcome=fail"];',
+            ]
+        )
 
     if spec.include_sdlc:
         sections.extend(

@@ -17,6 +17,9 @@ venv/
 env/
 p/
 .artifacts/
+.mypy_cache/
+.pyre/
+.py
 
 # IDE
 .vscode/

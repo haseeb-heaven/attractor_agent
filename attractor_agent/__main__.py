@@ -35,6 +35,7 @@ def main() -> None:
     parser.add_argument("dot_file", nargs="?", help="Optional DOT file to execute directly")
     parser.add_argument("--gui", action="store_true", help="Launch the Gradio GUI")
     parser.add_argument("--api", action="store_true", help="Launch the REST API")
+    parser.add_argument("--host", default=None, help="Host for API server")
     parser.add_argument("--port", type=int, default=None, help="Port for GUI or API")
     args, remaining = parser.parse_known_args()
 
@@ -44,7 +45,10 @@ def main() -> None:
 
             from attractor_agent.api import app
 
-            uvicorn.run(app, host="0.0.0.0", port=args.port or 8000)
+            host = args.host or "127.0.0.1"
+            port = args.port or 8000
+            print(f"Starting REST API on {host}:{port}...")
+            uvicorn.run(app, host=host, port=port)
             return
         except ImportError as exc:
             print(f"Failed to start API: {exc}")

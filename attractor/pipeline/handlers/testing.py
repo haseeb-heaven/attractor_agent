@@ -33,6 +33,18 @@ def _extract_filename(code: str) -> str | None:
     return None
 
 
+def _safe_relative_path(filename: str) -> Path | None:
+    raw = Path(filename)
+    if raw.is_absolute():
+        return None
+    if raw.drive or (raw.parts and raw.parts[0].endswith(":")):
+        return None
+    normalized = Path(*[part for part in raw.parts if part not in ("", ".")])
+    if any(part == ".." for part in normalized.parts):
+        return None
+    return normalized
+
+
 class TestExecutionHandler(Handler):
     """Executes generated unit tests against generated code in a sandbox."""
 
@@ -86,7 +98,16 @@ class TestExecutionHandler(Handler):
                     ext = ".py" if "py" in lang else ".js" if "js" in lang else ".txt"
                     filename = f"main{ext}"
                 try:
-                    (temp_path / filename).write_text(code, encoding="utf-8")
+                    safe_rel = _safe_relative_path(filename)
+                    if safe_rel is None:
+                        emitter.emit_simple(
+                            PipelineEventKind.LOG,
+                            message=f"Skipping unsafe code filename in sandbox: {filename}",
+                        )
+                        continue
+                    file_path = temp_path / safe_rel
+                    file_path.parent.mkdir(parents=True, exist_ok=True)
+                    file_path.write_text(code, encoding="utf-8")
                 except OSError as e:
                     emitter.emit_simple(PipelineEventKind.LOG, message=f"Failed to write code file in sandbox: {e}")
 
@@ -97,7 +118,16 @@ class TestExecutionHandler(Handler):
                     ext = ".py" if "py" in lang else ".js" if "js" in lang else ".txt"
                     filename = f"test_main{ext}"
                 try:
-                    (temp_path / filename).write_text(code, encoding="utf-8")
+                    safe_rel = _safe_relative_path(filename)
+                    if safe_rel is None:
+                        emitter.emit_simple(
+                            PipelineEventKind.LOG,
+                            message=f"Skipping unsafe test filename in sandbox: {filename}",
+                        )
+                        continue
+                    file_path = temp_path / safe_rel
+                    file_path.parent.mkdir(parents=True, exist_ok=True)
+                    file_path.write_text(code, encoding="utf-8")
                 except OSError as e:
                     emitter.emit_simple(PipelineEventKind.LOG, message=f"Failed to write test file in sandbox: {e}")
 

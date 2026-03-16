@@ -12,6 +12,7 @@ from attractor.pipeline.events import EventEmitter, PipelineEventKind
 from attractor.pipeline.graph import Graph, Node
 from attractor.pipeline.handlers.base import Handler, HandlerRegistry
 from attractor.pipeline.handlers.scoring import SatisfactionScorerHandler
+from attractor.pipeline.handlers.compile import CompileExecutionHandler
 from attractor.pipeline.handlers.testing import TestExecutionHandler
 from attractor.pipeline.handlers.twin import DigitalTwinHandler
 from attractor.pipeline.interviewer import (
@@ -89,12 +90,16 @@ class CodergenHandler(Handler):
                 "```"
             )
             context.set(f"{node.id}.output", sim_output)
+            context.set(f"{node.id}.raw_output", sim_output)
             context.set(f"{node.id}.status", "simulated")
             context.set(f"{node.id}.outcome", "SUCCESS")
             return Outcome(
                 status=StageStatus.SUCCESS,
                 notes="Simulated (no backend)",
-                context_updates={f"{node.id}.output": sim_output},
+                context_updates={
+                    f"{node.id}.output": sim_output,
+                    f"{node.id}.raw_output": sim_output,
+                },
             )
 
         try:
@@ -447,6 +452,7 @@ def create_default_registry() -> HandlerRegistry:
     registry.register("stack.manager_loop", ManagerLoopHandler())
     
     # New Handlers
+    registry.register("compile_runner", CompileExecutionHandler())
     registry.register("test_runner", TestExecutionHandler())
     registry.register("digital_twin", DigitalTwinHandler())
     registry.register("satisfaction_scorer", SatisfactionScorerHandler())

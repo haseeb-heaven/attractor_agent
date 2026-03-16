@@ -128,21 +128,21 @@ def _build_spec_from_args(args: argparse.Namespace) -> BuildRequest:
     elif args.request:
         spec = BuildRequest(
             request=args.request,
-            language=args.language,
+            language=args.language or "Python",
             framework=args.framework or "",
-            include_tests=args.include_tests,
-            include_sdlc=args.include_sdlc,
+            include_tests=True if args.include_tests is None else args.include_tests,
+            include_sdlc=True if args.include_sdlc is None else args.include_sdlc,
             use_mock=args.use_mock,
             auto_approve=args.auto_approve,
             require_human_review=args.require_human_review,
-            retry_save_attempts=args.retry_save_attempts,
+            retry_save_attempts=args.retry_save_attempts or 3,
             project_name=args.project_name or "",
             checkpoint_dir=args.project_dir or "",
         )
     else:
         raise ValueError("A request or --config file is required.")
 
-    if args.language:
+    if args.language is not None:
         spec.language = args.language
     if args.framework is not None:
         spec.framework = args.framework
@@ -150,11 +150,11 @@ def _build_spec_from_args(args: argparse.Namespace) -> BuildRequest:
         spec.project_name = args.project_name
     if args.project_dir:
         spec.checkpoint_dir = args.project_dir
-    if args.use_mock:
+    if args.use_mock is True:
         spec.use_mock = True
-    if args.require_human_review:
+    if args.require_human_review is True:
         spec.require_human_review = True
-    if args.auto_approve:
+    if args.auto_approve is True:
         spec.auto_approve = True
     if args.no_auto_approve:
         spec.auto_approve = False
@@ -198,15 +198,15 @@ def _create_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Attractor Agent CLI")
     parser.add_argument("--request", help="What to build")
     parser.add_argument("--config", help="Path to a JSON or TOML build config")
-    parser.add_argument("--language", default="Python", help="Target language")
+    parser.add_argument("--language", default=None, help="Target language")
     parser.add_argument("--framework", default=None, help="Framework name")
-    parser.add_argument("--include-tests", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--include-sdlc", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--include-tests", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--include-sdlc", action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument("--use-mock", action="store_true", help="Use the local mock LLM server")
     parser.add_argument("--auto-approve", action="store_true", help="Auto-approve review steps")
     parser.add_argument("--no-auto-approve", action="store_true", help="Disable auto-approve")
     parser.add_argument("--require-human-review", action="store_true", help="Insert a blocking review node")
-    parser.add_argument("--retry-save-attempts", type=int, default=3, help="Max extraction retry attempts")
+    parser.add_argument("--retry-save-attempts", type=int, default=None, help="Max extraction retry attempts")
     parser.add_argument("--project-name", help="Optional project slug override")
     parser.add_argument("--project-dir", help="Optional project output directory")
     parser.add_argument("--interactive", action="store_true", help="Force interactive prompts")

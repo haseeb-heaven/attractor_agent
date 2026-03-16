@@ -20,6 +20,8 @@ def edit_file_executor(args: dict[str, Any], env: ExecutionEnvironment) -> str:
     path = args["file_path"]
     old_string = args["old_string"]
     new_string = args["new_string"]
+    if not old_string:
+        raise ValueError("old_string must not be empty.")
     replace_all = args.get("replace_all", False)
     content = env.read_file_raw(path)
     count = content.count(old_string)

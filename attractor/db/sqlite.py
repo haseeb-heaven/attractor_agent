@@ -93,7 +93,10 @@ class SQLiteBackend(StorageBackend):
     def get_questions(self, run_id: str) -> list[dict[str, Any]]:
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
-            rows = conn.execute('SELECT * FROM questions WHERE run_id = ? AND answer IS NULL', (run_id,)).fetchall()
+            rows = conn.execute(
+                "SELECT * FROM questions WHERE run_id = ? ORDER BY created_at ASC",
+                (run_id,),
+            ).fetchall()
             return [dict(r) for r in rows]
 
     def answer_question(self, run_id: str, question_id: str, answer: dict[str, Any]) -> None:

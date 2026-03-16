@@ -1,6 +1,6 @@
 [build-system]
 requires = ["setuptools>=68.0", "wheel"]
-build-backend = "setuptools.backends._legacy:_Backend"
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "attractor"
@@ -26,3 +26,7 @@ attractor = "attractor.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["attractor*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = ["projects"]

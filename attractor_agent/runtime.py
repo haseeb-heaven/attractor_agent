@@ -38,7 +38,8 @@ def wait_for_port(host: str, port: int, timeout: float = 45.0) -> bool:
 
 class MockServer:
     def __init__(self, command: list[str] | None = None):
-        self.command = command or ["node", "run-mock.mjs"]
+        script = Path(__file__).resolve().parent / "run-mock.mjs"
+        self.command = command or ["node", str(script)]
         self.process: subprocess.Popen[str] | None = None
 
     def start(self) -> None:
@@ -174,6 +175,19 @@ def _resolve_filename(block: ExtractedBlock, index: int, language: str) -> str:
     return _default_filename_for_language(language, index)
 
 
+def _safe_relative_path(filename: str) -> Path | None:
+    raw = Path(filename)
+    if raw.is_absolute():
+        return None
+    # Block Windows drive prefixes like C:\...
+    if raw.drive or (raw.parts and raw.parts[0].endswith(":")):
+        return None
+    normalized = Path(*[part for part in raw.parts if part not in ("", ".")])
+    if any(part == ".." for part in normalized.parts):
+        return None
+    return normalized
+
+
 def _readme_run_instructions(language: str) -> str:
     run_instructions = {
         "python": "```bash\npip install -r requirements.txt\npython main.py\n```",
@@ -222,14 +236,22 @@ def save_output_files(
         if not code:
             continue
         filename = _resolve_filename(block, index, language)
-        file_path = project_dir / filename
-        file_path.parent.mkdir(parents=True, exist_ok=True)
-        file_path.write_text(code, encoding="utf-8")
-        saved_files.append(file_path)
+        safe_rel = _safe_relative_path(filename)
+        if safe_rel is None:
+            logger.warning("Skipped unsafe filename from model output: %s", filename)
+            continue
+        safe_path = (project_dir / safe_rel).resolve()
+        project_root = project_dir.resolve()
+        if project_root != safe_path and project_root not in safe_path.parents:
+            logger.warning("Skipped unsafe resolved filename from model output: %s", filename)
+            continue
+        safe_path.parent.mkdir(parents=True, exist_ok=True)
+        safe_path.write_text(code, encoding="utf-8")
+        saved_files.append(safe_path)
         extracted_manifest.append(
             {
-                "filename": filename,
-                "language": block.language or infer_language_from_filename(filename) or language.lower(),
+                "filename": safe_rel.as_posix(),
+                "language": block.language or infer_language_from_filename(safe_rel.name) or language.lower(),
                 "content": code,
             }
         )
@@ -256,11 +278,6 @@ def save_output_files(
         readme_lines.append(f"- `{file_path.relative_to(project_dir).as_posix()}`\n")
     readme_lines.append(f"\n## How to Run\n\n{_readme_run_instructions(language)}\n")
     (project_dir / "README.md").write_text("".join(readme_lines), encoding="utf-8")
-
-    if not any(path.name == app_file_name for path in saved_files):
-        primary_output = project_dir / app_file_name
-        primary_output.write_text(extracted_blocks[0].code.strip(), encoding="utf-8")
-        saved_files.append(primary_output)
 
     return saved_files
 
@@ -331,6 +348,8 @@ def execute_build(
 
         if final_result is None:
             raise RuntimeError("Pipeline did not execute.")
+        if final_result.success and not saved_files:
+            raise RuntimeError("No files were extracted from model output.")
 
         return ExecutionArtifacts(
             spec=spec,

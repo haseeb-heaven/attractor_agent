@@ -35,6 +35,7 @@ class LiteLLMAdapter(ProviderAdapter):
         self._api_key = api_key or os.environ.get("LITELLM_API_KEY")
         self._api_base = api_base or os.environ.get("LITELLM_BASE_URL")
         self._default_model = default_model or os.environ.get("LITELLM_MODEL", "")
+        self._provider_override = os.environ.get("LITELLM_PROVIDER")
         self._timeout = timeout
         self._litellm: Any = None
 
@@ -191,6 +192,9 @@ class LiteLLMAdapter(ProviderAdapter):
             )
         if request.response_format and request.response_format.type == "json":
             kwargs["response_format"] = {"type": "json_object"}
+
+        if self._provider_override and "custom_llm_provider" not in kwargs:
+            kwargs["custom_llm_provider"] = self._provider_override
 
         if request.provider_options:
             if "litellm" in request.provider_options and isinstance(
