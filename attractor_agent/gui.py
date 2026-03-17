@@ -1,374 +1,322 @@
-import os
-import re
+from __future__ import annotations
+
+import logging
 import threading
 import time
-import subprocess
-import socket
-import atexit
-import logging
+import uuid
 from pathlib import Path
 
 import gradio as gr
-from attractor.pipeline.engine import PipelineConfig, run_pipeline
-from attractor.pipeline.events import EventEmitter, PipelineEventKind, PipelineEvent
-from attractor.pipeline.interviewer import Interviewer, Question, Answer
-from attractor.pipeline.backend import LLMBackend
-from attractor_agent.cli import build_dot
+
+from attractor.pipeline.events import EventEmitter, PipelineEvent, PipelineEventKind
+from attractor.pipeline.interviewer import Answer, Interviewer, Question
+
+from attractor_agent.project import (
+    BuildRequest,
+    SUPPORTED_LANGUAGES,
+    get_gradio_language,
+    load_build_request,
+)
+from attractor_agent.runtime import execute_build, get_project_dir
 
 logger = logging.getLogger("attractor_agent.gui")
 
 
 class GradioInterviewer(Interviewer):
-    """Thread-safe interviewer for Gradio human review gates."""
-
-    def __init__(self):
-        self.question = None
+    def __init__(self) -> None:
+        self.question: Question | None = None
         self.answer_event = threading.Event()
-        self.selected_label = None
+        self.selected_label: str | None = None
 
     def ask(self, question: Question) -> Answer:
         self.question = question
         self.answer_event.clear()
         self.answer_event.wait()
-        ans = self.selected_label
+        selected_label = self.selected_label or ""
         self.question = None
         self.selected_label = None
-        return Answer(question_id=question.id, selected_label=ans)
+        return Answer(question_id=question.id, selected_label=selected_label)
 
-    def set_answer(self, label: str):
+    def set_answer(self, label: str) -> None:
         self.selected_label = label
         self.answer_event.set()
 
 
-# ── Port Waiter ───────────────────────────────────────────────────────────────
-def wait_for_port(host: str, port: int, timeout: float = 45.0) -> bool:
-    """
-    Poll until a TCP port accepts connections or timeout expires.
-    """
-    logger.info(f"Waiting for server at {host}:{port} (timeout={timeout}s)")
-    start = time.time()
-    while time.time() - start < timeout:
-        try:
-            with socket.create_connection((host, port), timeout=1.0):
-                logger.info(f"✓ Server ready at {host}:{port}")
-                return True
-        except (ConnectionRefusedError, OSError):
-            time.sleep(0.5)
-    raise RuntimeError(
-        f"Server at {host}:{port} did not respond within {timeout}s"
+session_state: dict[str, GradioInterviewer] = {}
+active_run_id: str | None = None
+
+
+def get_interviewer(run_id: str) -> GradioInterviewer | None:
+    return session_state.get(run_id)
+
+
+def set_interviewer(run_id: str, interviewer: GradioInterviewer) -> None:
+    session_state[run_id] = interviewer
+
+
+def clear_interviewer(run_id: str) -> None:
+    session_state.pop(run_id, None)
+
+
+def load_config_into_form(config_file: str | None):
+    if not config_file:
+        return ("", "Python", "", True, True, False, True, False, 3, "No config loaded.")
+
+    spec = load_build_request(config_file)
+    message = f"Loaded config from {Path(config_file).name}"
+    return (
+        spec.request,
+        spec.language,
+        spec.framework,
+        spec.include_tests,
+        spec.include_sdlc,
+        spec.use_mock,
+        spec.auto_approve,
+        spec.require_human_review,
+        spec.retry_save_attempts,
+        message,
     )
 
 
-def slugify(text: str) -> str:
-    """Convert text to filesystem-safe slug."""
-    slug = re.sub(r'[^a-zA-Z0-9_\-]', '_', text.lower())
-    return re.sub(r'_+', '_', slug).strip('_')
+def _resolve_spec(
+    request: str,
+    language: str,
+    framework: str,
+    include_tests: bool,
+    include_sdlc: bool,
+    use_mock: bool,
+    auto_approve: bool,
+    require_human_review: bool,
+    retry_save_attempts: int,
+    config_file: str | None,
+) -> BuildRequest:
+    if config_file:
+        spec = load_build_request(config_file)
+        spec.request = request or spec.request
+        spec.language = language or spec.language
+        spec.framework = framework
+        spec.include_tests = include_tests
+        spec.include_sdlc = include_sdlc
+        spec.use_mock = use_mock
+        spec.auto_approve = auto_approve
+        spec.require_human_review = require_human_review
+        spec.retry_save_attempts = retry_save_attempts
+        return spec
+
+    return BuildRequest(
+        request=request.strip(),
+        language=language,
+        framework=framework.strip(),
+        include_tests=include_tests,
+        include_sdlc=include_sdlc,
+        use_mock=use_mock,
+        auto_approve=auto_approve,
+        require_human_review=require_human_review,
+        retry_save_attempts=max(1, int(retry_save_attempts)),
+    )
 
 
-def get_extension(language: str) -> str:
-    """Map language name to file extension."""
-    lang = language.lower()
-    if "javascript" in lang or lang == "js":
-        return ".js"
-    elif "typescript" in lang or lang == "ts":
-        return ".ts"
-    elif "html" in lang:
-        return ".html"
-    elif "go" in lang:
-        return ".go"
-    elif "rust" in lang:
-        return ".rs"
-    elif "c++" in lang or "cpp" in lang:
-        return ".cpp"
-    elif "java" in lang and "script" not in lang:
-        return ".java"
-    return ".py"
+def start_pipeline(
+    request: str,
+    language: str,
+    framework: str,
+    include_tests: bool,
+    include_sdlc: bool,
+    use_mock: bool,
+    auto_approve: bool,
+    require_human_review: bool,
+    retry_save_attempts: int,
+    config_file: str | None,
+):
+    global active_run_id
+    run_id = str(uuid.uuid4())
+    active_run_id = run_id
 
-
-def get_gradio_language(language: str) -> str:
-    """Map language name to Gradio Code component language."""
-    lang = language.lower()
-    if "javascript" in lang:
-        return "javascript"
-    elif "typescript" in lang:
-        return "typescript"
-    elif "html" in lang:
-        return "html"
-    elif "go" in lang:
-        return "go"
-    elif "rust" in lang:
-        return "rust"
-    elif "c++" in lang or "cpp" in lang:
-        return "cpp"
-    elif "java" in lang and "script" not in lang:
-        return "java"
-    return "python"
-
-
-# Global active interviewer for button callbacks
-active_interviewer: GradioInterviewer | None = None
-
-
-def start_pipeline(request: str, language: str, framework: str, include_tests: bool, include_sdlc: bool, use_mock: bool = False):
-    """Main pipeline generator — streams logs + code to Gradio UI."""
-    global active_interviewer
-
-    # Validate input
-    if not request.strip():
-        yield "⚠️ Please enter what you want to build.", "", gr.update(visible=False), gr.update(visible=False)
+    try:
+        spec = _resolve_spec(
+            request,
+            language,
+            framework,
+            include_tests,
+            include_sdlc,
+            use_mock,
+            auto_approve,
+            require_human_review,
+            retry_save_attempts,
+            config_file,
+        )
+    except Exception as exc:
+        yield str(exc), "", gr.update(visible=False), gr.update(visible=False)
         return
 
-    # Setup project directory
-    slug = slugify(request)[:30] or "project"
-    project_dir = Path("projects") / slug
-    os.makedirs(project_dir, exist_ok=True)
-    app_file_name = f"main{get_extension(language)}"
+    if not spec.request:
+        yield "Please enter a build request or upload a config file.", "", gr.update(visible=False), gr.update(visible=False)
+        return
 
-    # Generate DOT pipeline
-    dot_content = build_dot(request, language, framework, include_tests, include_sdlc)
-    dot_file = project_dir / "pipeline.dot"
-    dot_file.write_text(dot_content, encoding="utf-8")
+    logs = [f"Starting pipeline for: {spec.request}", f"Project dir: {get_project_dir(spec)}"]
 
-    logs = [f"🚀 Pipeline started: {request}\n"]
-
-    if use_mock:
-        yield f"🚀 Pipeline started: {request}\nSaved: {dot_file}\n🚀 Starting Mock LLM server on port 5555...\n", "", gr.update(visible=False), gr.update(visible=False)
-        
-        # Start llmock as a subprocess using shell=True string for Windows compatibility
-        mock_process = subprocess.Popen(
-            "npx -y @copilotkit/llmock --port 5555",
-            shell=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE
-        )
-        # Ensure it cleans up on exit
-        atexit.register(lambda: mock_process.terminate())
-        
-        try:
-            # Wait until the port is actually accepting connections
-            wait_for_port("localhost", 5555, timeout=45)
-            logs.append("✓ Mock LLM server is ready.")
-        except RuntimeError as e:
-            logs.append(f"❌ Mock server startup failed: {e}")
-            yield "\n".join(logs), "", gr.update(visible=False), gr.update(visible=False)
-            return
-        
-        from attractor.llm.client import Client
-        from attractor.llm.adapters.openai import OpenAIAdapter
-        mock_adapter = OpenAIAdapter(api_key="mock-key", base_url="http://localhost:5555/v1")
-        client = Client(providers={"mock": mock_adapter}, default_provider="mock")
-        backend = LLMBackend(client=client)
-    else:
-        backend = LLMBackend()
-        yield f"🚀 Pipeline started: {request}\nSaved: {dot_file}\n", "", gr.update(visible=False), gr.update(visible=False)
-
-    interviewer = GradioInterviewer()
-    active_interviewer = interviewer
-
-    config = PipelineConfig(
-        simulate=False,
-        codergen_backend=backend,
-        interviewer=interviewer,
-        checkpoint_dir=str(project_dir)
-    )
+    interviewer: Interviewer | None = None
+    if spec.require_human_review and not spec.auto_approve:
+        interviewer = GradioInterviewer()
+        set_interviewer(run_id, interviewer)
 
     emitter = EventEmitter()
+    result_container = {}
 
     @emitter.on
-    def on_event(event: PipelineEvent):
-        nonlocal logs
-        msg = event.message or ""
-        node = event.node_id
+    def on_event(event: PipelineEvent) -> None:
+        message = event.message or ""
+        node = event.node_id or "pipeline"
         if event.kind == PipelineEventKind.STAGE_STARTED:
-            logs.append(f"⏳ Running: {node}")
+            logs.append(f"Running: {node}")
         elif event.kind == PipelineEventKind.STAGE_COMPLETED:
-            logs.append(f"✅ Done: {node}")
+            logs.append(f"Completed: {node}")
         elif event.kind == PipelineEventKind.STAGE_FAILED:
-            logs.append(f"❌ Failed: {node} — {msg}")
+            logs.append(f"Failed: {node} - {message}")
         elif event.kind == PipelineEventKind.INTERVIEW_STARTED:
-            logs.append(f"⚠️ Review required: {node}")
+            logs.append(f"Review required: {node}")
 
-    # Run pipeline in background thread
-    result_container = []
+    def run_it() -> None:
+        try:
+            result_container["artifacts"] = execute_build(spec, interviewer=interviewer, emitter=emitter)
+        except Exception as exc:
+            result_container["error"] = str(exc)
 
-    def run_it():
-        result_container.append(run_pipeline(dot_content, config=config, emitter=emitter))
+    thread = threading.Thread(target=run_it, daemon=True)
+    thread.start()
 
-    t = threading.Thread(target=run_it, daemon=True)
-    t.start()
-
-    # ✅ REFACTORED: Unified loop for streaming logs + handling human gates
     while True:
-        # PRIORITY 1: Human review gate — show buttons prominently
+        active_interviewer = get_interviewer(run_id)
         if active_interviewer and active_interviewer.question:
-            q = active_interviewer.question
-            
-            # Extract clean code if this is a code review prompt
-            code_text = q.text
-            match = re.search(r"```[a-zA-Z0-9+\-#]*\s*(.*?)```", q.text, re.DOTALL)
-            if match:
-                code_text = match.group(1).strip()
-            
-            # Update UI: Show the question in logs and make buttons visible
+            question = active_interviewer.question
             yield (
-                "\n".join(logs) + f"\n\n👉 ACTION REQUIRED: {q.text[:200]}...",
-                code_text,
+                "\n".join(logs + [f"Action required: {question.node_id}"]),
+                question.text,
                 gr.update(visible=True, interactive=True),
-                gr.update(visible=True, interactive=True)
+                gr.update(visible=True, interactive=True),
             )
-
-            # Wait for user input via button click
             while active_interviewer and active_interviewer.question:
-                time.sleep(0.5)
-            
-            logs.append("✅ Human responded — continuing pipeline.")
-            # Hide buttons immediately after response
-            yield "\n".join(logs), code_text, gr.update(visible=False), gr.update(visible=False)
-
-        # PRIORITY 2: Pipeline finished
-        elif not t.is_alive():
-            break
-
-        # PRIORITY 3: Still running — stream latest logs
-        else:
-            # When running normally, ensure buttons stay hidden
+                time.sleep(0.2)
             yield "\n".join(logs), "", gr.update(visible=False), gr.update(visible=False)
-            time.sleep(1.0)
+        elif not thread.is_alive():
+            break
+        else:
+            yield "\n".join(logs), "", gr.update(visible=False), gr.update(visible=False)
+            time.sleep(0.5)
 
-    # ── Post-Execution Visualization ──────────────────────────────────────────
-    if not result_container:
-        logs.append("❌ Pipeline crashed or yielded no results.")
-        yield "\n".join(logs), "", gr.update(visible=False), gr.update(visible=False)
+    if "error" in result_container:
+        clear_interviewer(run_id)
+        yield result_container["error"], "", gr.update(visible=False), gr.update(visible=False)
         return
 
-    result = result_container[0]
-    if result.success:
-        # Final response extraction
-        output = result.context.get_string("last_response", "Pipeline completed successfully.")
-        code = output
-        match = re.search(r"```[a-zA-Z0-9+\-#]*\s*(.*?)```", output, re.DOTALL)
-        if match:
-            code = match.group(1).strip()
-
-        app_file = project_dir / app_file_name
-        try:
-            app_file.write_text(code, encoding="utf-8")
-            logs.append(f"\n🎉 Deployment successful! Final code saved to: {app_file}")
-        except Exception as e:
-            logs.append(f"\n⚠️ Could not save file: {e}")
-
+    artifacts = result_container["artifacts"]
+    if artifacts.result.success and artifacts.saved_files:
+        preview_file = artifacts.saved_files[0]
+        code = preview_file.read_text(encoding="utf-8")
+        logs.append(f"Saved {len(artifacts.saved_files)} file(s) to {artifacts.project_dir}")
+        clear_interviewer(run_id)
         yield "\n".join(logs), code, gr.update(visible=False), gr.update(visible=False)
-    else:
-        logs.append(f"\n❌ Pipeline failed: {result.error}")
-        yield "\n".join(logs), "", gr.update(visible=False), gr.update(visible=False)
+        return
+
+    error = artifacts.result.error or "No files were extracted from the pipeline output."
+    clear_interviewer(run_id)
+    yield "\n".join(logs + [error]), "", gr.update(visible=False), gr.update(visible=False)
 
 
-# ✅ FIX: Return gr.update to hide buttons after click
 def approve_action():
-    """Handle Approve — resume pipeline."""
-    global active_interviewer
+    global active_run_id
+    if not active_run_id:
+        return gr.update(visible=False), gr.update(visible=False)
+    active_interviewer = get_interviewer(active_run_id)
     if active_interviewer:
         active_interviewer.set_answer("[A]pprove")
     return gr.update(visible=False), gr.update(visible=False)
 
 
 def retry_action():
-    """Handle Retry — loop back to Generate."""
-    global active_interviewer
+    global active_run_id
+    if not active_run_id:
+        return gr.update(visible=False), gr.update(visible=False)
+    active_interviewer = get_interviewer(active_run_id)
     if active_interviewer:
         active_interviewer.set_answer("[R]etry")
     return gr.update(visible=False), gr.update(visible=False)
 
 
-def run_gui():
-    """Launch Gradio web UI."""
-    custom_css = """
-    .centered-layout {
-        max-width: 1000px;
-        margin: 0 auto !important;
-        display: flex;
-        flex-direction: column;
-        justify-content: center;
-    }
-    .footer { text-align: center; margin-top: 20px; color: #666; }
-    """
+def run_gui(port: int = 8000) -> None:
+    with gr.Blocks(title="Attractor Agent") as app:
+        gr.Markdown("# Attractor Agent")
+        gr.Markdown("Run the autonomous SDLC pipeline from form inputs or a JSON/TOML config file.")
 
-    with gr.Blocks(title="Attractor Agent", css=custom_css) as app:
-        with gr.Column(elem_classes="centered-layout"):
-            gr.Markdown("<h1 style='text-align: center;'>🚀 Attractor Agent</h1>")
-            gr.Markdown("<p style='text-align: center;'>Configure your project and watch the SDLC pipeline run.</p>")
+        with gr.Row():
+            request_input = gr.Textbox(label="What do you want to build?", lines=3)
+            config_file = gr.File(label="Build config (.json or .toml)", file_count="single", type="filepath")
 
-            with gr.Row():
-                with gr.Column(scale=1):
-                    request_input = gr.Textbox(
-                        placeholder="e.g. Build a Flask books app with auth",
-                        label="What do you want to build?",
-                        lines=3
-                    )
-                    with gr.Row():
-                        lang_input = gr.Dropdown(
-                            choices=["Python", "JavaScript", "TypeScript", "HTML/CSS", "Go", "Rust", "C++", "Java"],
-                            value="Python",
-                            label="Programming Language",
-                            scale=1
-                        )
-                        framework_input = gr.Textbox(
-                            placeholder="e.g. Flask, React (optional)",
-                            label="Framework",
-                            scale=1
-                        )
-                    with gr.Row():
-                        tests_input = gr.Checkbox(value=True, label="Include Unit Tests")
-                        sdlc_input = gr.Checkbox(value=True, label="Include SDLC Review")
-                        mock_input = gr.Checkbox(value=False, label="Use Mock LLM (localhost:5555)")
+        with gr.Row():
+            language_input = gr.Dropdown(choices=SUPPORTED_LANGUAGES, value="Python", label="Language")
+            framework_input = gr.Textbox(label="Framework")
+            retry_input = gr.Number(value=3, precision=0, label="Retry save attempts")
 
-                    start_btn = gr.Button("🚀 Build Project", variant="primary", size="lg")
+        with gr.Row():
+            tests_input = gr.Checkbox(value=True, label="Include tests")
+            sdlc_input = gr.Checkbox(value=True, label="Include SDLC review")
+            mock_input = gr.Checkbox(value=False, label="Use local mock server")
+            auto_approve_input = gr.Checkbox(value=True, label="Auto approve")
+            human_review_input = gr.Checkbox(value=False, label="Require human review")
 
-            with gr.Row():
-                with gr.Column(scale=1):
-                    log_box = gr.Textbox(label="Execution Logs", interactive=False, lines=6)
+        load_button = gr.Button("Load Config")
+        start_button = gr.Button("Build Project", variant="primary")
+        status_box = gr.Textbox(label="Status", interactive=False)
+        log_box = gr.Textbox(label="Execution logs", interactive=False, lines=14)
+        code_box = gr.Code(label="Preview", interactive=False, language="python", lines=20)
 
-            with gr.Row():
-                with gr.Column(scale=1):
-                    gr.Markdown("### 🛠️ Generated Code Review")
-                    code_box = gr.Code(
-                        label="Generated Code",
-                        language=None,
-                        interactive=False,
-                        lines=20
-                    )
-                    with gr.Row():
-                        btn_approve = gr.Button("✅ Accept & Save", variant="primary", visible=False, size="lg")
-                        btn_retry = gr.Button("🔄 Reject & Retry", variant="stop", visible=False, size="lg")
+        with gr.Row():
+            approve_button = gr.Button("Approve", visible=False, variant="primary")
+            retry_button = gr.Button("Retry", visible=False, variant="stop")
 
-            gr.Markdown("<div class='footer'>Powered by Attractor Pipeline Engine</div>")
-
-            start_btn.click(
-                start_pipeline,
-                inputs=[request_input, lang_input, framework_input, tests_input, sdlc_input, mock_input],
-                outputs=[log_box, code_box, btn_approve, btn_retry]
-            )
-            
-            # Dynamic language highlighting
-            def update_code_lang(lang):
-                return gr.update(language=get_gradio_language(lang))
-            
-            lang_input.change(update_code_lang, inputs=[lang_input], outputs=[code_box])
-
-        # ✅ FIX: outputs wired so buttons hide after click
-        btn_approve.click(
-            approve_action,
-            inputs=[],
-            outputs=[btn_approve, btn_retry]
-        )
-        btn_retry.click(
-            retry_action,
-            inputs=[],
-            outputs=[btn_approve, btn_retry]
+        load_button.click(
+            load_config_into_form,
+            inputs=[config_file],
+            outputs=[
+                request_input,
+                language_input,
+                framework_input,
+                tests_input,
+                sdlc_input,
+                mock_input,
+                auto_approve_input,
+                human_review_input,
+                retry_input,
+                status_box,
+            ],
         )
 
-    print("🚀 Launching on http://localhost:8000")
-    app.launch(server_name="127.0.0.1", server_port=8000, theme=gr.themes.Soft())
+        start_button.click(
+            start_pipeline,
+            inputs=[
+                request_input,
+                language_input,
+                framework_input,
+                tests_input,
+                sdlc_input,
+                mock_input,
+                auto_approve_input,
+                human_review_input,
+                retry_input,
+                config_file,
+            ],
+            outputs=[log_box, code_box, approve_button, retry_button],
+        )
+
+        language_input.change(
+            lambda lang: gr.update(language=get_gradio_language(lang)),
+            inputs=[language_input],
+            outputs=[code_box],
+        )
+        approve_button.click(approve_action, outputs=[approve_button, retry_button])
+        retry_button.click(retry_action, outputs=[approve_button, retry_button])
+
+    app.launch(server_name="127.0.0.1", server_port=port, theme=gr.themes.Soft())
 
 
 if __name__ == "__main__":

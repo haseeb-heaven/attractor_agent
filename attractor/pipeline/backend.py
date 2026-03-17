@@ -27,7 +27,8 @@ class LLMBackend:
             node.attrs.get("model") 
             or node.llm_model 
             or os.environ.get("DEFAULT_LLM_MODEL")
-            or "gpt-4o-mini" # Last resort default
+            or os.environ.get("LITELLM_MODEL")
+            or "model-name" # Last resort default, override with LITELLM_MODEL
         )
         
         # Create request

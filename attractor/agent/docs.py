@@ -13,9 +13,7 @@ def discover_project_docs(env: ExecutionEnvironment, provider_id: str) -> str:
     
     # Files to look for based on provider
     provider_docs = {
-        "openai": [".codex/instructions.md"],
-        "anthropic": ["CLAUDE.md"],
-        "gemini": ["GEMINI.md"],
+        "litellm": [".codex/instructions.md"],
     }
     
     targets = ["AGENTS.md"] + provider_docs.get(provider_id, [])

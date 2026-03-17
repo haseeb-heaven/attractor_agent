@@ -12,6 +12,7 @@ from attractor.pipeline.events import EventEmitter, PipelineEventKind
 from attractor.pipeline.graph import Graph, Node
 from attractor.pipeline.handlers.base import Handler, HandlerRegistry
 from attractor.pipeline.handlers.scoring import SatisfactionScorerHandler
+from attractor.pipeline.handlers.compile import CompileExecutionHandler
 from attractor.pipeline.handlers.testing import TestExecutionHandler
 from attractor.pipeline.handlers.twin import DigitalTwinHandler
 from attractor.pipeline.interviewer import (
@@ -89,32 +90,32 @@ class CodergenHandler(Handler):
                 "```"
             )
             context.set(f"{node.id}.output", sim_output)
+            context.set(f"{node.id}.raw_output", sim_output)
             context.set(f"{node.id}.status", "simulated")
             context.set(f"{node.id}.outcome", "SUCCESS")
             return Outcome(
                 status=StageStatus.SUCCESS,
                 notes="Simulated (no backend)",
-                context_updates={f"{node.id}.output": sim_output},
+                context_updates={
+                    f"{node.id}.output": sim_output,
+                    f"{node.id}.raw_output": sim_output,
+                },
             )
 
         try:
             result = backend.generate(prompt, node=node, context=context)
-            
-            # Extract code blocks (Section 5.3)
-            # Find all ```...``` blocks
-            code_blocks = re.findall(r"```(?:[a-zA-Z0-9+\-#]*)\s*(.*?)```", result, re.DOTALL)
-            if code_blocks:
-                # Use the first block as the primary output for downstream handlers
-                # but keep the full result in .raw_output
-                context.set(f"{node.id}.raw_output", result)
-                result = code_blocks[0].strip()
 
+            # Preserve full model output for downstream multi-file extraction.
+            context.set(f"{node.id}.raw_output", result)
             context.set(f"{node.id}.output", result)
             context.set(f"{node.id}.status", "completed")
             context.set(f"{node.id}.outcome", "SUCCESS")
             return Outcome(
                 status=StageStatus.SUCCESS,
-                context_updates={f"{node.id}.output": result},
+                context_updates={
+                    f"{node.id}.output": result,
+                    f"{node.id}.raw_output": result,
+                },
             )
         except Exception as e:
             context.set(f"{node.id}.status", "failed")
@@ -451,6 +452,7 @@ def create_default_registry() -> HandlerRegistry:
     registry.register("stack.manager_loop", ManagerLoopHandler())
     
     # New Handlers
+    registry.register("compile_runner", CompileExecutionHandler())
     registry.register("test_runner", TestExecutionHandler())
     registry.register("digital_twin", DigitalTwinHandler())
     registry.register("satisfaction_scorer", SatisfactionScorerHandler())
